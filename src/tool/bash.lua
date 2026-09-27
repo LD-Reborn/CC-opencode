@@ -141,12 +141,18 @@ local function run(command, workdir, timeoutMs, ctx)
     -- No cancellable job handle available. The command still runs with its output
     -- captured, but on timeout it cannot be killed and is reported as abandoned.
     local abandoned = false
-    local coroutine = coroutine.create(function()
+    local co = coroutine.create(function()
       exitCode = shell.run(line)
     end)
     local timer = os.startTimer(math.ceil(timeoutMs / 1000))
-    local event = parallel.waitForAny({ coroutine, timer })
-    if event == timer then
+    local event = parallel.waitForAny({
+      function()
+        coroutine.resume(co)
+        return coroutine.status(co) == "dead" and "shell" or nil
+      end,
+      function() return "timer" end,
+    })
+    if event == "timer" then
       abandoned = true
       notes[#notes + 1] = string.format(
         "the command was still running after the timeout of %d ms and was abandoned; its output file may still be growing.",

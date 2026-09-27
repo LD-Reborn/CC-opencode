@@ -283,7 +283,7 @@ end
 function M.listDir(path)
   local names = {}
   if M.isCC then
-    for _, name in ipairs(fs.dir(path)) do
+    for _, name in ipairs(fs.list(path)) do
       names[#names + 1] = name
     end
   else

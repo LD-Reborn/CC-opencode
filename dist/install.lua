@@ -32,7 +32,7 @@ local FILES = {
   { "init.lua", 25188, "init.lua" },
   { "src/agent.lua", 13912, "src/agent.lua" },
   { "src/config.lua", 6849, "src/config.lua" },
-  { "src/environment.lua", 16848, "src/environment.lua" },
+  { "src/environment.lua", 16849, "src/environment.lua" },
   { "src/http.lua", 9866, "src/http.lua" },
   { "src/json.lua", 9449, "src/json.lua" },
   { "src/llm.lua", 8315, "src/llm.lua" },
@@ -41,7 +41,7 @@ local FILES = {
   { "src/prompt.lua", 7430, "src/prompt.lua" },
   { "src/provider.lua", 6448, "src/provider.lua" },
   { "src/session.lua", 7047, "src/session.lua" },
-  { "src/tool/bash.lua", 8783, "src/tool/bash.lua" },
+  { "src/tool/bash.lua", 8924, "src/tool/bash.lua" },
   { "src/tool/edit.lua", 9879, "src/tool/edit.lua" },
   { "src/tool/glob.lua", 2449, "src/tool/glob.lua" },
   { "src/tool/grep.lua", 4643, "src/tool/grep.lua" },
@@ -55,7 +55,7 @@ local FILES = {
   { "src/util.lua", 5452, "src/util.lua" }
 }
 
-local BUNDLE = { "dist/opencode.lua", 242216, "opencode.lua" }
+local BUNDLE = { "dist/opencode.lua", 242358, "opencode.lua" }
 
 -- Where the files land. Decided once, here, rather than relying on the shell's
 -- directory still being the same when the last file arrives.
