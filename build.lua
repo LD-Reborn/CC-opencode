@@ -53,6 +53,85 @@ local function read(path)
   return content
 end
 
+--- Replace every comment in a source with a blank, leaving the code alone.
+--
+-- Only the dependency scan below cares, and only about this project's own source,
+-- so this is a blunt instrument. What it is not allowed to be is wrong about
+-- punctuation: a `--` inside a string or a long bracket is two ordinary
+-- characters, and treating it as a comment truncates the rest of the line -- which
+-- is how a real `require` ends up half-deleted. Ten of the twenty-two modules use
+-- long brackets for tool descriptions, so they are walked, not guessed at.
+--
+-- Line structure is preserved so that anything reading the result can still count
+-- lines, and so a comment left behind is where the comment was rather than a
+-- colon, which would be a syntax error.
+local function stripComments(source)
+  local out = {}
+  local function emit(text)
+    out[#out + 1] = text
+  end
+
+  local i, n = 1, #source
+  while i <= n do
+    local char = source:sub(i, i)
+    local following = source:sub(i + 1)
+
+    if char == '"' or char == "'" then
+      -- A short string. An escaped quote does not end it, so the backslashes in
+      -- front of a candidate are counted rather than assumed absent.
+      local stop = source:find(char, i + 1, true)
+      while stop do
+        local backslashes, k = 0, stop - 1
+        while k >= i and source:sub(k, k) == "\\" do
+          backslashes = backslashes + 1
+          k = k - 1
+        end
+        if backslashes % 2 == 0 then
+          break
+        end
+        stop = source:find(char, stop + 1, true)
+      end
+      local finish = stop or n
+      emit(source:sub(i, finish))
+      i = finish + 1
+
+    elseif char == "[" and following:match("^=*%[") then
+      -- A long bracket: a string when at the start of an expression, a comment
+      -- when it follows `--`. Either way it runs to a matching `]` plus the same
+      -- number of `=`, and its contents are copied through untouched.
+      local level = following:match("^(=*)%[")
+      local close = "]=" .. level .. "]"
+      local stop = source:find(close, i + #level + 2, true)
+      if not stop then
+        emit(source:sub(i))
+        i = n + 1
+      else
+        emit(source:sub(i, stop + #close - 1))
+        i = stop + #close
+      end
+
+    elseif char == "-" and following:sub(1, 1) == "-" then
+      if following:sub(2, 2) == "[" and following:match("^%-%-=*%[") then
+        -- A long comment, which is a long bracket that began with `--`.
+        local level = following:match("^%-%-(=*)%[")
+        local close = "]=" .. level .. "]"
+        local stop = source:find(close, i + #level + 3, true) or n
+        emit((source:sub(i, stop):gsub("[^\n]", " ")))
+        i = stop + 1
+      else
+        local stop = source:find("\n", i, true) or n
+        emit((source:sub(i, stop):gsub("[^\n]", " ")))
+        i = stop
+      end
+
+    else
+      emit(char)
+      i = i + 1
+    end
+  end
+  return table.concat(out)
+end
+
 --- What a source refers to, as two lists.
 --
 -- `direct` is every name passed to `require`. That is authoritative, so a name in
@@ -63,7 +142,13 @@ end
 -- lists its built-ins as data rather than requiring them, so this catches
 -- dependencies a `require` scan misses. It is a guess, so it only affects the
 -- order of the file, and the bundle loads modules lazily anyway.
+--
+-- Comments come out first. This project's comments explain things by quoting the
+-- code they explain, and a `require("src/util")` written in a comment about
+-- requires is not a dependency of anything -- but read as one it is a name that is
+-- not in the bundle, and the build stops.
 local function dependencies(source)
+  source = stripComments(source)
   local direct, named, seen = {}, {}, {}
   local function add(list, name)
     if not seen[name] then
@@ -196,10 +281,19 @@ for name in pairs(__sources) do
   package.preload[name] = __require
 end
 
--- Run. The return value is the shell's exit code, and ComputerCraft passes `arg`
--- in as a global, so `opencode <question>` works the same as it does for the
--- modular version.
-return __require("cli").main(arg or {}, nil)
+-- Run. On a computer the entry point has already run itself, and its return value
+-- -- the shell's exit code -- is what requiring it produced. ComputerCraft hands a
+-- program's return to nobody and passes `arg` in as a global, so `opencode
+-- <question>` arrives the same way it does for the modular version.
+--
+-- When the bundle is loaded by something else, as the test suite does, the entry
+-- came back as a library instead, and `main` is still waiting to be called. That is
+-- the only place this return value is read.
+local cli = __require("cli")
+if type(cli) == "table" then
+  return cli.main(arg or {}, nil)
+end
+return cli
 ]])
 
   return table.concat(parts)

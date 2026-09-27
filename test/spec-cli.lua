@@ -25,16 +25,30 @@ return function(t, mock)
     env.write(mock.root .. "/opencode.json", json.encode(config))
   end
 
-  local function loadInit()
+  --- `running` names the program CC believes is running, which is what `init.lua`
+  --- asks to decide whether to start itself. This harness is that program, so by
+  --- default init.lua comes back as a library with `M.main` left for the test to
+  --- call. Passing "init.lua" or "opencode.lua" makes it start itself instead,
+  --- which is what a computer does, and `argv` is the command line it would get.
+  local function loadInit(running, argv, screen)
     mock.setup()
     writeConfig()
+    if screen then
+      -- Named the way `environment.terminal` looks for one, so the self-start path
+      -- finds a terminal the way it would on a computer. Every other test here
+      -- hands `main` a screen directly and so never exercises that lookup.
+      mock.attach({ monitor_1 = screen })
+    end
+    shell.getRunningProgram = function()
+      return running or "/test/harness.lua"
+    end
     local path = t.root .. "/init.lua"
     local chunk, err = loadfile(path)
     if not chunk then
       t.ok(false, "could not load init.lua: " .. tostring(err))
       return nil
     end
-    return chunk()
+    return chunk(unpack(argv or {}))
   end
 
   local function textTurn(content)
@@ -574,5 +588,207 @@ return function(t, mock)
     _G.term = nil
     local code = init.main({ "hi" }, nil)
     t.eq(code, 1, "with nowhere to print, the program gives up rather than crashing")
+  end
+
+  -- Starting itself.
+  --
+  -- `init.lua` ends in `return M` and nothing calls `M.main`, so running it does
+  -- nothing at all: no error, no output, an immediate return. A test that called
+  -- `M.main` itself never noticed, which is why a whole program could sit there
+  -- being unstartable while the suite was green.
+  --
+  -- `require` and "run this file" are indistinguishable from inside the chunk, and
+  -- a computer has no `debug.getinfo` to settle it. `shell.getRunningProgram` can,
+  -- because `require` leaves it naming whatever program actually started -- so a
+  -- program that loads this as a library does not get a REPL as a side effect.
+
+  do
+    local init = assert(loadInit())
+    t.eq(type(init), "table", "loaded by something else, it stays a library")
+    t.eq(type(init.main), "function", "with main left for the caller")
+  end
+
+  do
+    for _, name in ipairs({ "init.lua", "opencode.lua" }) do
+      local screen = mock.screen({})
+      local code = loadInit("/program/" .. name, { "--help" }, screen)
+      t.eq(code, 0, name .. " is the running program, so it runs: the exit code")
+      t.contains(screen.text, "interactive session", name .. " printed the usage rather than nothing")
+    end
+  end
+
+  do
+    -- The same file under a name nobody installed it as is a library, and saying so
+    -- is better than starting a REPL inside somebody else's program.
+    local screen = mock.screen({})
+    local loaded = loadInit("/program/renamed.lua", { "--help" }, screen)
+    t.eq(type(loaded), "table", "a name that is not ours does not start it")
+    t.eq(screen.text, "", "and prints nothing at all")
+  end
+
+  -- Finding the library.
+  --
+  -- ComputerCraft gives every program its own `require` and its own `package`, and
+  -- its searchpath joins a relative pattern onto *the program's own directory*:
+  -- `fs.combine(dir, sPath)`. The entry point sits beside `src/`, one level above
+  -- the modules, so a bare `require("util")` looks for `<dir>/util.lua`, finds
+  -- nothing, and the program dies on its first require without printing a word.
+  --
+  -- Nothing else in this file can see that. The host's own `package.path` already
+  -- answers to this repository's `src/`, so an entry point with no way of finding
+  -- its library passes every other test here -- which is what happened, with the
+  -- suite green while the program was unstartable on a computer.
+  --
+  -- So the module search is modelled rather than borrowed. CC loads a program with
+  -- `load(contents, "@" .. path, nil, env)` and hands it an env carrying a private
+  -- `require` and `package`, so the model does the same: a separate environment with
+  -- its own cache, its own path, and a searchpath that resolves relative patterns
+  -- against a program directory. Nothing reaches the host's cache, which is what
+  -- would otherwise let a stale `require` answer for a module that is not there.
+
+  --- A program environment shaped the way ComputerCraft's is: bare names, a default
+  --- path, relative patterns joined onto a program directory, and a private cache.
+  local function likeComputerCraft(base, running)
+    local fake = { loaded = {}, preload = {}, path = "?;?.lua;?/init.lua", looked = {} }
+    -- Declared first because the file searcher below loads modules into it, and a
+    -- reference written before this assignment would close over the *spec's* `env`
+    -- instead -- which is the environment module, and a very convincing wrong answer.
+    local env
+
+    local package = {
+      path = fake.path,
+      loaded = fake.loaded,
+      preload = fake.preload,
+    }
+
+    local function search(name)
+      for pattern in package.path:gmatch("[^;]+") do
+        local candidate = pattern:gsub("%?", (name:gsub("%.", "/")))
+        -- A leading separator is used as written; anything else is relative to the
+        -- program, which is the behaviour that makes a bare name miss.
+        if candidate:sub(1, 1) ~= "/" then
+          candidate = base .. "/" .. candidate
+        end
+        local file = io.open(candidate, "r")
+        if file then
+          file:close()
+          local chunk, err = loadfile(candidate)
+          if chunk then
+            -- CC loads a module into the program's own environment, so a module that
+            -- requires another one searches exactly as the entry point did.
+            setfenv(chunk, env)
+            fake.looked[#fake.looked + 1] = name
+            return chunk, candidate
+          end
+          return nil, tostring(err)
+        end
+      end
+      return nil, "no file for '" .. name .. "'"
+    end
+
+    package.loaders = {
+      function(name)
+        local loader = fake.preload[name]
+        if loader then
+          return loader
+        end
+        return nil, "no field package.preload['" .. name .. "']"
+      end,
+      search,
+    }
+
+    local function require(name)
+      if fake.loaded[name] ~= nil then
+        return fake.loaded[name]
+      end
+      local reasons = {}
+      for _, searcher in ipairs(package.loaders) do
+        local loader, detail = searcher(name)
+        if loader then
+          fake.loaded[name] = loader(name) or true
+          return fake.loaded[name]
+        end
+        reasons[#reasons + 1] = tostring(detail)
+      end
+      error("module '" .. name .. "' not found:\n  " .. table.concat(reasons, "\n  "), 0)
+    end
+
+    -- The host's globals, with the program on top of them: what CC builds for a
+    -- program, minus the parts of a computer that this suite has no use for.
+    env = setmetatable({
+      require = require,
+      package = package,
+      shell = { getRunningProgram = function()
+        return running
+      end },
+    }, { __index = _G })
+
+    return env, fake
+  end
+
+  do
+    local base = t.root
+    local env, fake = likeComputerCraft(base, base .. "/harness.lua")
+    mock.setup()
+    local chunk, err = loadfile(base .. "/init.lua")
+    setfenv(chunk, env)
+    local ok, result = pcall(chunk)
+
+    t.ok(ok, "a modular checkout loads under ComputerCraft's own module search"
+      .. (ok and "" or (" -- it said: " .. tostring(result):gsub("\n", " | "))))
+    t.eq(type(ok and result and result.main), "function", "and comes back as an entry point that can be driven")
+    t.contains(table.concat(fake.looked, " "), "util", "with the modules really searched for, not answered from a cache")
+  end
+
+  do
+    -- The same program run as the program, with nothing else to find its library:
+    -- the modules are all in `package.preload`, which is the bundle's situation and
+    -- the reason the bundle needs none of the path.
+    local base = t.root
+    local env, fake = likeComputerCraft(base, base .. "/harness.lua")
+    setmetatable(fake.preload, {
+      __index = function()
+        return function()
+          return {}
+        end
+      end,
+    })
+    local chunk = assert(loadfile(base .. "/init.lua"))
+    setfenv(chunk, env)
+    local ok, result = pcall(chunk)
+
+    t.ok(ok, "a bundled program loads with nothing on the path at all")
+    t.eq(#fake.looked, 0, "because every module was already in package.preload")
+    t.eq(type(ok and result), "table", "and it stays a library, because the harness is not its program")
+    t.contains(env.package.path, base .. "/src/?.lua", "though the path entries are there, unused")
+  end
+
+  do
+    -- A program installed at the root is the case where the root is already a
+    -- separator, so joining one more would ask for "//?.lua". The load is expected
+    -- to fail -- there is no /src on a host -- and it is the path that is being
+    -- looked at rather than the result.
+    local env, fake = likeComputerCraft("/nowhere", "/init.lua")
+    mock.setup()
+    local chunk = assert(loadfile(t.root .. "/init.lua"))
+    setfenv(chunk, env)
+    local ok = pcall(chunk)
+
+    t.ok(not ok, "the load did fail, so this really is the root case")
+    local doubled = {}
+    for entry in env.package.path:gmatch("[^;]+") do
+      if entry:find("//", 1, true) then
+        doubled[#doubled + 1] = entry
+      end
+    end
+    t.eq(table.concat(doubled, " "), "", "a program at the root asks for no doubled separator")
+    local head = {}
+    for entry in env.package.path:gmatch("[^;]+") do
+      head[#head + 1] = entry
+      if #head == 3 then
+        break
+      end
+    end
+    t.eq(table.concat(head, " "), "/?.lua /src/?.lua /src/?/init.lua", "the root being used as one separator")
   end
 end

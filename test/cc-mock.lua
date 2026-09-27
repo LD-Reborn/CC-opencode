@@ -180,8 +180,13 @@ function M.install()
     dir = function()
       return M.root
     end,
+    -- This harness is the program, and it is not called `init.lua` or
+    -- `opencode.lua`, so an entry point loaded here comes back as a library. That
+    -- is the same answer a computer gives for a program requiring one, and it is
+    -- what keeps `init.lua` from starting a REPL inside the test run. The specs
+    -- that want the other answer name one of those two files here.
     getRunningProgram = function()
-      return "/test/opencode.lua"
+      return "/test/harness.lua"
     end,
     -- Returning nil forces the `bash` tool's coroutine fallback path, which is
     -- the one ComputerCraft installs actually take.

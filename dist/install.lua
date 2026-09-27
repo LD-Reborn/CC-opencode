@@ -18,7 +18,7 @@ local BRANCH = "main"
 
 -- fetch path, expected size, path to write
 local FILES = {
-  { "init.lua", 16721, "init.lua" },
+  { "init.lua", 19805, "init.lua" },
   { "src/agent.lua", 13912, "src/agent.lua" },
   { "src/config.lua", 5984, "src/config.lua" },
   { "src/environment.lua", 9403, "src/environment.lua" },
@@ -43,7 +43,7 @@ local FILES = {
   { "src/util.lua", 5452, "src/util.lua" }
 }
 
-local BUNDLE = { "dist/opencode.lua", 170249, "opencode.lua" }
+local BUNDLE = { "dist/opencode.lua", 173742, "opencode.lua" }
 
 -- Where the files land. Decided once, here, rather than relying on the shell's
 -- directory still being the same when the last file arrives.

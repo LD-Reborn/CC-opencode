@@ -4819,9 +4819,51 @@ do end
 
 --- Locate the library relative to this program, so the modular checkout and the
 --- single-file bundle both work without editing `package.path` by hand.
+--
+-- ComputerCraft hands every program its own `require` and its own `package`, and it
+-- resolves relative search patterns against *the program's own directory*. That
+-- directory is wherever the program was found, which is not wherever its library
+-- is: `init.lua` sits beside `src/`, one level above the modules. So a plain
+-- `require("util")` looks for `<dir>/util.lua`, finds nothing, and the program dies
+-- before it can print a word.
+--
+-- Three absolute entries fix it, and the absoluteness is the whole of the fix. CC
+-- reads `package.path` each time it looks a name up, so rebinding the field is
+-- enough; and a pattern beginning with `/` is used as written, which is the one
+-- case where the program directory is not joined onto the front of it. Without that
+-- the entries would be resolved against the directory they were meant to get away
+-- from.
+--
+-- The `src/` prefix cannot be a fourth entry, because a `src/?.lua` pattern only
+-- answers to a name spelled `src/util` -- and spelling it that way on every require
+-- would leave the bundle to unspell it. A path entry is the only way to say it.
+--
+-- A bundled program needs none of this: the bundle installs every module into
+-- `package.preload` under its bare name, so the first searcher answers before the
+-- path is ever consulted.
+--
+-- Once, too. The path is prepended, so a second call would prepend it again -- no
+-- harm on a computer, which runs this once, but a test suite that loads the entry
+-- point twenty times would leave twenty copies behind it.
+local located = false
+
 local function bootstrap()
+  if located then
+    return
+  end
+  located = true
+
   local program = (shell and shell.getRunningProgram and shell.getRunningProgram()) or ""
-  local directory = program:match("^(.*)/[^/]*$") or "."
+  local directory = program:match("^(.*)/[^/]*$")
+  -- A program at the root matches as the empty string, which is already the one
+  -- separator a path needs -- `"" .. "/?.lua"` is `/?.lua`. So only a program with
+  -- no directory in it at all falls back to a relative path, and a doubled separator
+  -- in the name is collapsed rather than joined.
+  if not directory then
+    directory = "."
+  elseif directory == "/" then
+    directory = ""
+  end
   package.path = table.concat({
     directory .. "/?.lua",
     directory .. "/src/?.lua",
@@ -5313,6 +5355,29 @@ function M.main(argv, monitor)
   return 0
 end
 
+--- Whether this file is the program being run, rather than a library that something
+--- else loaded.
+--
+-- `require` and "run this file" look identical from inside the chunk, and a
+-- computer has no `debug.getinfo` to tell them apart. `shell.getRunningProgram`
+-- can: it names whichever program CC actually started, and `require` leaves it
+-- alone. So a program that loads this one as a library does not get a REPL as a
+-- side effect, which is the only reason this is worth asking.
+--
+-- The cost is a name, so it starts under the two names the installer writes. Rename
+-- the file and it becomes a library, to be driven through `M.main`.
+local function isProgram()
+  local running = (shell and shell.getRunningProgram and shell.getRunningProgram()) or ""
+  local name = running:match("([^/]+)$") or ""
+  return name == "init.lua" or name == "opencode.lua"
+end
+
+if isProgram() then
+  -- CC hands a program its command line as the chunk's varargs, so
+  -- `shell.run("init.lua what is 2 + 2")` arrives here as one question.
+  return M.main({ ... }, env.terminal())
+end
+
 return M
 
 end
@@ -5351,7 +5416,16 @@ for name in pairs(__sources) do
   package.preload[name] = __require
 end
 
--- Run. The return value is the shell's exit code, and ComputerCraft passes `arg`
--- in as a global, so `opencode <question>` works the same as it does for the
--- modular version.
-return __require("cli").main(arg or {}, nil)
+-- Run. On a computer the entry point has already run itself, and its return value
+-- -- the shell's exit code -- is what requiring it produced. ComputerCraft hands a
+-- program's return to nobody and passes `arg` in as a global, so `opencode
+-- <question>` arrives the same way it does for the modular version.
+--
+-- When the bundle is loaded by something else, as the test suite does, the entry
+-- came back as a library instead, and `main` is still waiting to be called. That is
+-- the only place this return value is read.
+local cli = __require("cli")
+if type(cli) == "table" then
+  return cli.main(arg or {}, nil)
+end
+return cli
