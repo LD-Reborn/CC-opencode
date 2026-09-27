@@ -92,14 +92,39 @@ return function(t, mock)
 
   t.eq(provider.get({ cwd = mock.root }, "ollama").apiKeyResolved, "ollama", "a provider with a built-in key needs no env")
   t.eq(provider.get({ cwd = mock.root }, "lmstudio").apiKeyResolved, "lmstudio", "the lmstudio profile ships a local key")
-  -- The zen gateway is not one of the two that work without a key. It used to be
-  -- given `apiKey = "public"`, which reads as though no key is needed and is
-  -- answered with a 401, so it is worth pinning that it is refused up front
-  -- instead, with a message naming the ways to supply one.
-  local noKey, noKeyReason = provider.get({ cwd = mock.root }, "opencode")
-  t.eq(noKey, nil, "the opencode profile has no built-in key")
-  t.contains(noKeyReason, "No API key", "and says so rather than failing later at the gateway")
-  t.contains(noKeyReason, "env", "naming the ways to supply one")
+  -- The zen gateway carries no built-in key. It used to be given `apiKey = "public"`,
+  -- which reads as though no key is needed and is answered with a 401. It is not a
+  -- provider-level property whether one is needed -- the gateway serves one model
+  -- that answers unauthenticated and refuses the rest -- so `get` records the
+  -- absence and `model` is the one that refuses, naming the model that was asked
+  -- for. Refusing here instead would have made a fresh install unusable.
+  local noKey = provider.get({ cwd = mock.root }, "opencode")
+  t.eq(noKey.apiKeyResolved, nil, "the opencode profile has no built-in key")
+  t.ok(noKey, "and that is not an error at the provider level")
+  -- Through `config.load`, not a hand-built table, because the keyless declaration
+  -- ships in the defaults. A raw config proves nothing about a fresh install, and
+  -- the fresh install is the case this change is for.
+  local fresh = config.load(mock.root)
+  t.ok(fresh.provider.opencode.models["space-bunny-free"], "the defaults declare the keyless model")
+  local noModel, noModelReason = provider.model(fresh, "opencode", "gpt-5")
+  t.eq(noModel, nil, "a model that needs a credential is refused")
+  t.contains(noModelReason, "No API key", "saying so rather than failing later at the gateway")
+  t.contains(noModelReason, "opencode/gpt-5", "and naming the model, since one model out of 82 does not need a key")
+  t.contains(noModelReason, "env", "naming the ways to supply one")
+  t.contains(noModelReason, "OPENCODE_API_KEY", "and the variable to set")
+  -- The one model the gateway serves unauthenticated. The header is decided from
+  -- this value, so `nil` rather than "" is what makes the request go out bare.
+  local free = provider.model(fresh, "opencode", "space-bunny-free")
+  t.eq(free.apiKey, nil, "a model declaring apiKey false resolves with no credential")
+  t.eq(free.base, "https://opencode.ai/zen/v1", "and still gets the profile's base url")
+  t.ok(free.name, "and a name for the picker")
+  t.eq(free.limit, provider.DEFAULT_LIMIT, "with the default limit rather than an invented context size")
+  local paidWithKey = provider.model(
+    config.load(mock.root, { env = { OPENCODE_API_KEY = "zen-key" } }),
+    "opencode",
+    "gpt-5"
+  )
+  t.eq(paidWithKey.apiKey, "zen-key", "a key, once set, satisfies a model that needs one")
   t.eq(
     provider.get({ cwd = mock.root, env = { OPENCODE_API_KEY = "zen-key" } }, "opencode").apiKeyResolved,
     "zen-key",
@@ -166,4 +191,33 @@ return function(t, mock)
   broken:close()
   local survived = config.load(mock.root)
   t.eq(survived.model, config.DEFAULT_MODEL, "a malformed config falls back to the defaults")
+
+  -- `"apiKey": false` is written in JSON, so it has to survive the JSON parser as
+  -- a boolean and not as nil. nil would fail the `~= false` test the other way and
+  -- refuse a model the user had explicitly declared free -- reported as a missing
+  -- key, for a key they had said was not needed. Long brackets, because the value
+  -- is braces all the way down and a `]]` would end the string early.
+  local keyless = io.open(mock.root .. "/opencode.json", "w")
+  keyless:write([==[{
+    "model": "mylocal/llama3",
+    "provider": {
+      "mylocal": {
+        "api": "http://192.168.1.5:11434/v1",
+        "models": { "llama3": { "name": "Llama 3", "apiKey": false } }
+      }
+    }
+  }]==])
+  keyless:close()
+  local declared = config.load(mock.root)
+  t.eq(
+    type(declared.provider.mylocal.models.llama3.apiKey),
+    "boolean",
+    "\"apiKey\": false arrives as a boolean rather than as an absent field"
+  )
+  local selfHosted = provider.model(declared, "mylocal", "llama3")
+  t.ok(selfHosted, "a self-hosted model declared free resolves with no credential")
+  t.eq(selfHosted and selfHosted.apiKey, nil, "and carries no key, so no Authorization header is sent")
+  t.eq(selfHosted and selfHosted.base, "http://192.168.1.5:11434/v1", "against the base url from the config")
+  local sameProviderNeedsKey = provider.model(declared, "mylocal", "something-else")
+  t.eq(sameProviderNeedsKey, nil, "while another model on the same provider is still refused")
 end

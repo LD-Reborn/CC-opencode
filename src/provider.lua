@@ -53,6 +53,11 @@ function M.list(configValue)
 end
 
 --- Resolved provider entry: base url, credential, and model metadata.
+--
+-- A missing credential is not an error here. Whether one is needed is a property of
+-- the *model*: the gateway serves one model that answers unauthenticated, and a
+-- local server may ignore the header. So the key is recorded as absent and
+-- `M.model` decides, which is the only place that knows which model was asked for.
 function M.get(configValue, providerID)
   local providers = M.list(configValue)
   local provider = providers[providerID]
@@ -62,13 +67,7 @@ function M.get(configValue, providerID)
   if not provider.base then
     return nil, "Provider '" .. providerID .. "' has no baseURL. Set options.baseURL in opencode.json."
   end
-  local key = config.apiKey(configValue, provider)
-  if not key then
-    local names = table.concat(provider.env or {}, ", ")
-    return nil, "No API key for provider '" .. providerID .. "'. Set options.apiKey, options.apiKeyFile, or env."
-      .. (names ~= "" and (" (" .. names .. ")") or "")
-  end
-  provider.apiKeyResolved = key
+  provider.apiKeyResolved = config.apiKey(configValue, provider)
   return provider
 end
 
@@ -80,6 +79,19 @@ local function mergeOptions(providerOptions, modelOptions)
   return out
 end
 
+--- The advice given when a model needs a credential and none could be found.
+--
+-- It names the variable to set, because "no API key" on its own leaves the reader
+-- to guess between three places it can go, and because the gateway's own 401 says
+-- only "Missing API key." It also names the model, since on a gateway where one
+-- model out of 82 needs no key, "no key" is not obviously the problem.
+local function noCredential(providerID, provider, modelID)
+  local names = table.concat(provider.env or {}, ", ")
+  return "No API key for '" .. providerID .. "/" .. modelID .. "'."
+    .. " Set options.apiKey, options.apiKeyFile, or env."
+    .. (names ~= "" and (" (" .. names .. ")") or "")
+end
+
 --- Metadata for one model within a provider, merged with the provider defaults.
 function M.model(configValue, providerID, modelID)
   local provider = M.get(configValue, providerID)
@@ -88,12 +100,19 @@ function M.model(configValue, providerID, modelID)
   end
   local override = ((configValue.provider or {})[providerID] or {}).models or {}
   local entry = override[modelID] or {}
+  local key = provider.apiKeyResolved
+  if not key and entry.apiKey ~= false then
+    -- No credential, and this model has not declared that it does without one.
+    return nil, noCredential(providerID, provider, modelID)
+  end
   return {
     providerID = providerID,
     id = modelID,
     name = entry.name or modelID,
     base = provider.base,
-    apiKey = provider.apiKeyResolved,
+    -- Nil rather than empty: `llm` reads this to decide whether to send an
+    -- `Authorization` header at all, and an empty one is not the same request.
+    apiKey = key,
     api = provider.api,
     limit = entry.limit or M.DEFAULT_LIMIT,
     options = mergeOptions(provider.options, entry.options),
@@ -133,7 +152,12 @@ function M.availableModels(configValue)
           id = id .. "/" .. modelID,
           name = entry.name or modelID,
           provider = provider.name or id,
-          available = config.apiKey(configValue, provider) ~= nil,
+          -- Asked of `M.model` rather than of the provider, because "usable" is a
+          -- property of the model: one of them needs no credential, and marking it
+          -- `(no api key)` would flag the only model a fresh install can use as
+          -- the one it cannot. Asking `M.model` also means the list and the
+          -- request can never disagree about what is available.
+          available = M.model(configValue, id, modelID) ~= nil,
         }
       end
     end

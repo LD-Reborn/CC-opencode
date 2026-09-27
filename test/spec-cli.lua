@@ -82,24 +82,66 @@ return function(t, mock)
 
   do
     local init = assert(loadInit())
-    -- A key, because the default provider is the zen gateway and it needs one.
-    -- Without one nothing resolves at all, which the missing-key case below
-    -- covers for a provider named explicitly.
+    -- A key, because these tests are about the other keys on the command line, and
+    -- a model that needs a credential is the easiest way to have one resolve.
 
     local state = init.setup({}, mock.screen({}))
 
     t.eq(state.agent, "build", "the default agent is build")
-    t.eq(state.config.model, "opencode/gpt-5", "the default model comes from the built-in defaults")
-    t.eq(state.model.id, "gpt-5", "the default model resolves")
+    t.eq(state.config.model, "opencode/space-bunny-free", "the default model comes from the built-in defaults")
+    t.eq(state.model.id, "space-bunny-free", "the default model resolves")
     t.eq(state.model.providerID, "opencode", "the default provider is opencode")
     t.eq(state.model.apiKey, "zen-key", "and takes the key from the env")
-    t.eq(state.smallModel.id, "gpt-5-nano", "the small model resolves too")
+    t.eq(state.smallModel.id, "space-bunny-free", "the small model resolves too")
     t.eq(state.error, nil, "a working config reports no error")
     t.eq(state.autoSave, false, "sessions are not saved unless asked")
     t.eq(state.stream, false, "requests are not streamed unless asked")
     t.eq(type(state.session.id), "string", "setup starts a session")
     t.eq(state.cwd, mock.root, "the working directory defaults to the shell's")
     t.eq(init.state, state, "state is published for the rest of the program")
+  end
+
+  do
+    -- The case a fresh install is in, and the one this default exists for: no
+    -- config file, no key, nothing set. It has to start and resolve a model, or
+    -- the first thing anyone sees after installing is a refusal.
+    --
+    -- Every field is read through `field` rather than indexed. A default that
+    -- fails to resolve leaves `state.model` nil, and indexing that aborts the
+    -- whole run on the first failure instead of reporting all of them -- which is
+    -- how a paid default slipped through as a crash with no explanation.
+    local function field(model, key)
+      return model and model[key]
+    end
+
+    local init = assert(loadInit())
+    fs.delete(mock.root .. "/opencode.json")
+    t.eq(fs.exists(mock.root .. "/opencode.json"), false, "there is no config on this computer")
+
+    local state = init.setup({}, mock.screen({}))
+
+    t.eq(state.error, nil, "an unconfigured computer starts without an error")
+    t.ok(state.model, "and resolves a model")
+    t.eq(field(state.model, "id"), "space-bunny-free", "which is the one the gateway serves unauthenticated")
+    t.eq(field(state.model, "apiKey"), nil, "with no credential, so the request goes out without an Authorization header")
+    t.ok(state.smallModel, "the small model resolves too, or titles and compaction fail")
+    t.eq(field(state.smallModel, "apiKey"), nil, "also without a credential")
+  end
+
+  do
+    -- And a key is still what unlocks the rest: setting one must not change the
+    -- default, only add the option of something else.
+    local init = assert(loadInit())
+    fs.delete(mock.root .. "/opencode.json")
+    local state = init.setup({ "--model", "opencode/gpt-5" }, mock.screen({}))
+    t.eq(state.model, nil, "a paid model is still refused with no key")
+    writeConfig({ env = { OPENCODE_API_KEY = "zen-key" } })
+    local keyed = assert(loadInit())
+    t.eq(
+      keyed.setup({ "--model", "opencode/gpt-5" }, mock.screen({})).model.apiKey,
+      "zen-key",
+      "and accepted once one is set"
+    )
   end
 
   do
@@ -114,7 +156,7 @@ return function(t, mock)
     for _, drawn in ipairs(screen.drawn) do
       t.ok(#drawn <= 51, "nothing is drawn past the right edge: [" .. drawn .. "]")
     end
-    t.contains(screen.text, "No API key for provider 'groq'", "and the message is still all there")
+    t.contains(screen.text, "No API key for 'groq/llama-3.3-70b'", "and the message is still all there")
     t.contains(screen.text, "GROQ_API_KEY", "including the part that names the variable to set")
     t.contains(screen.text, "or env.", "and the end of it, which is what used to be lost")
   end
@@ -125,7 +167,7 @@ return function(t, mock)
     local init = assert(loadInit())
     local wide = mock.screen({ "/exit" }, { 200, 40 })
     init.main({ "--model", "groq/llama-3.3-70b" }, wide)
-    t.contains(wide.text, "No API key for provider 'groq'", "the same message is reported when there is room")
+    t.contains(wide.text, "No API key for 'groq/llama-3.3-70b'", "the same message is reported when there is room")
   end
 
   do
@@ -148,8 +190,8 @@ return function(t, mock)
   do
     local init = assert(loadInit())
     local state = init.setup({ "--model", "groq/llama-3.3-70b" }, mock.screen({}))
-    t.eq(state.model, nil, "a provider with no key resolves to nothing")
-    t.contains(state.error, "No API key for provider 'groq'", "the error names the provider")
+    t.eq(state.model, nil, "a model with no key resolves to nothing")
+    t.contains(state.error, "No API key for 'groq/llama-3.3-70b'", "the error names the model asked for")
     t.contains(state.error, "GROQ_API_KEY", "the error names the variable to set")
   end
 
@@ -337,7 +379,7 @@ return function(t, mock)
     t.contains(screen.text, "opencode for ComputerCraft", "the banner is printed")
     t.contains(screen.text, "/model", "/help lists the commands")
     t.contains(screen.text, "/exit", "/help lists every command")
-    t.contains(screen.text, "model: opencode/gpt-5", "the banner shows the model")
+    t.contains(screen.text, "model: opencode/space-bunny-free", "the banner shows the model")
     t.eq(#mock.requests, 0, "commands do not call a model")
   end
 
@@ -355,15 +397,19 @@ return function(t, mock)
     local screen = mock.screen({ "/model groq/llama", "/exit" })
     init.main({}, screen)
     t.contains(screen.text, "No API key", "an unusable model is refused with a reason")
-    t.eq(init.state.config.model, "opencode/gpt-5", "the previous model is kept")
+    t.eq(init.state.config.model, "opencode/space-bunny-free", "the previous model is kept")
   end
 
   do
+    -- `/models` used to open on a fresh install to say nothing was configured,
+    -- which is honest and useless. The defaults declare the one model that works
+    -- without a key, so the list has something in it before anything is written --
+    -- and it is listed as available, which is the whole point of it being there.
     local init = assert(loadInit())
     local screen = mock.screen({ "/models", "/exit" })
     init.main({}, screen)
-    t.contains(screen.text, "No models are listed in the config", "an empty config explains itself")
-    t.contains(screen.text, "opencode.json", "and says where to add one")
+    t.contains(screen.text, "opencode/space-bunny-free", "/models lists the model that needs no key")
+    t.ok(not screen.text:find("space%-bunny%-free%s+.-%(%(no api key%)"), "/models does not mark it as needing a key")
   end
 
   do

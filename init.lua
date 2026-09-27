@@ -236,6 +236,11 @@ end
 --- `/models` shows what the config can actually reach. A provider with no `models`
 --- block cannot be listed, because nothing in the config says which model ids it
 --- serves, so the hint points at the file rather than guessing.
+--
+--- The defaults declare one model, so this is not what a fresh install shows any
+--- more. It is kept as a guard: `merge` only ever adds keys, so a config cannot
+--- undeclare the default, but a future default that shipped none would otherwise
+--- print an empty list and say nothing about why.
 local function listModels(monitor, current)
   local models = provider.availableModels(current.config)
   if #models == 0 then

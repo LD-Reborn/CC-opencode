@@ -9,12 +9,18 @@ local env = require("environment")
 
 local M = {}
 
--- Both of these are ids the gateway actually serves, which is worth stating
--- because the obvious guess for a small model is not one of them: titles and
--- compaction summaries go to the small model on every saved session, and a
--- retired id fails the whole turn rather than degrading to a worse title.
-M.DEFAULT_MODEL = "opencode/gpt-5"
-M.DEFAULT_SMALL_MODEL = "opencode/gpt-5-nano"
+-- The gateway serves 82 models and exactly one of them answers without a
+-- credential: `space-bunny-free`. The other ten ids ending in `-free` do not, and
+-- refuse with 403 "OpenCode's free tier can only be used from within OpenCode" --
+-- they are gated on the official client, not on being free. Everything else refuses
+-- with 401 "Missing API key."
+--
+-- So the default is the one model that works on a computer that has never been
+-- given a key, which is the state a fresh install is in. It is a single model on a
+-- third-party gateway with no availability promise, so a key is worth having: set
+-- `env` and change `model` to any of the other 81.
+M.DEFAULT_MODEL = "opencode/space-bunny-free"
+M.DEFAULT_SMALL_MODEL = "opencode/space-bunny-free"
 
 M.DEFAULTS = {
   model = M.DEFAULT_MODEL,
@@ -24,6 +30,17 @@ M.DEFAULTS = {
   -- Name a session from its first question when it is saved. Set to false to
   -- skip the extra request.
   title = true,
+  -- The one model that needs no credential, declared so the picker lists it and
+  -- resolution knows to send the request without an `Authorization` header. Its
+  -- context size is not published, so `limit` is left to the default rather than
+  -- guessed at; declare one here if you find out.
+  provider = {
+    opencode = {
+      models = {
+        ["space-bunny-free"] = { name = "Space Bunny (free)", apiKey = false },
+      },
+    },
+  },
   agent = {
     build = { steps = 25 },
     general = { steps = 15 },
@@ -47,8 +64,9 @@ M.PROFILES = {
   -- near-miss and is not one: models.opencode.ai is the models.dev website, and
   -- it answers every path under it with a 302 to its front page, so a base url
   -- pointing there connects and then hands back HTML where a JSON reply should
-  -- be. It needs a key like any other provider; the key is issued on opencode.ai
-  -- and goes in `env.OPENCODE_API_KEY`.
+  -- be. It needs a key for all but one of its models; that one is declared in
+  -- M.DEFAULTS, and the key is issued on opencode.ai and goes in
+  -- `env.OPENCODE_API_KEY`.
   opencode = { name = "opencode zen", base = "https://opencode.ai/zen/v1", env = { "OPENCODE_API_KEY" } },
   openai = { name = "OpenAI", base = "https://api.openai.com/v1", env = { "OPENAI_API_KEY" } },
   openrouter = { name = "OpenRouter", base = "https://openrouter.ai/api/v1", env = { "OPENROUTER_API_KEY" } },

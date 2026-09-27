@@ -218,8 +218,9 @@ Configuration is a single `opencode.json`, read from the working directory first
 and then from `/`. It is JSON, not Lua, so it is safe to keep next to a world
 save or a paste.
 
-The minimum, if you are happy with the default model. The key is not optional —
-the zen gateway is an ordinary provider that happens to be the default:
+There is no minimum. With no `opencode.json` at all you get the one model that
+needs no credential, which is the default. To use a paid one, the key is not
+optional:
 
 ```json
 {
@@ -228,6 +229,8 @@ the zen gateway is an ordinary provider that happens to be the default:
 }
 ```
 
+See [API keys](#api-keys) for what does and does not need one.
+
 A more typical file:
 
 ```json
@@ -235,7 +238,7 @@ A more typical file:
   "$schema": "https://opencode.ai/config.json",
 
   "model": "openrouter/anthropic/claude-sonnet-4",
-  "small_model": "opencode/gpt-5-nano",
+  "small_model": "opencode/space-bunny-free",
 
   "env": {
     "OPENROUTER_API_KEY": "sk-or-v1-..."
@@ -277,8 +280,8 @@ Every key is optional.
 
 | Key | Meaning | Default |
 | --- | --- | --- |
-| `model` | `provider/model` to use | `opencode/gpt-5` |
-| `small_model` | Model for session titles and compaction summaries | `opencode/gpt-5-nano` |
+| `model` | `provider/model` to use | `opencode/space-bunny-free` |
+| `small_model` | Model for session titles and compaction summaries | same as `model` |
 | `env` | API keys, keyed by the provider's variable name | none |
 | `provider` | Per-provider base url, headers, model list, per-model limits | see below |
 | `agent` | Step budget and prompt override, per agent | 25 / 15 / 25 steps |
@@ -300,15 +303,17 @@ each one reads:
 `opencode` (`OPENCODE_API_KEY`), `openai` (`OPENAI_API_KEY`), `openrouter`,
 `groq`, `cerebras`, `deepinfra`, `deepseek`, `fireworks`, `togetherai`, `xai`,
 `ollama`, and `lmstudio` — the last two with a placeholder key, since a local
-server ignores the header. Every other one needs a real key; a provider with
-none is refused at startup, naming the variable to set, rather than failing later
-at the gateway.
+server ignores the header. Every other one needs a real key for all but one model;
+a model that needs a key and has none is refused at startup, naming both the model
+and the variable to set, rather than failing later at the gateway.
 
 The zen gateway is on `opencode.ai`, and the key is issued there. It is worth
 being precise about that, because `models.opencode.ai` looks like the same
 service and is not: it is the models.dev website, and it answers every path under
 it with a redirect to its front page, so a base url pointing there connects and
-then hands back HTML where a JSON reply should be.
+then hands back HTML where a JSON reply should be. Of the 82 models it serves,
+`space-bunny-free` is the one that answers without a key, and it is the default
+for that reason; see [API keys](#api-keys).
 
 Any other OpenAI-compatible endpoint is a config entry away, and nothing else is
 needed:
@@ -329,14 +334,30 @@ needed:
 ```
 
 Per provider: `api` (the base url; the client appends `/chat/completions`),
-`name`, `options` (request defaults: `apiKey`, `apiKeyFile`, `apiKey` placeholders,
-`maxTokens`, `temperature`, `topP`, `reasoningEffort`, `timeout`, `headers`), and
-`models`. Per model: `name`, `limit.context`, `limit.output`, `options`, `headers`.
+`name`, `env` (the variable names a key may be read from), `options` (request
+defaults: `apiKey`, `apiKeyFile`, `maxTokens`, `temperature`, `topP`,
+`reasoningEffort`, `timeout`, `headers`), and `models`. Per model: `name`,
+`limit.context`, `limit.output`, `options`, `headers`, and `apiKey: false` to
+declare that it needs no credential.
 
 `limit.context` is not cosmetic: it is the point at which the conversation is
-summarised. If you leave it out, 128 KB is assumed.
+summarised. If you leave it out, 128 KB is assumed. That guess is also the reason
+the built-in free model leaves it alone: the gateway does not publish a context
+size for it, and a wrong number fails the request rather than degrading.
 
 ### API keys
+
+You do not need one to start. The default model is `opencode/space-bunny-free`,
+which is the one model on the opencode gateway that answers without a credential,
+so a fresh install runs as installed. A key is worth having, because it unlocks the
+other 81 models, but nothing refuses you until you ask for one of them.
+
+That is worth spelling out, because the gateway serves eleven ids ending in
+`-free` and ten of them are not reachable. They answer 403 *"OpenCode's free tier
+can only be used from within OpenCode"* — they are gated on the official client,
+not on being free. Every paid model answers 401 *"Missing API key."* Only
+`space-bunny-free` answers 200 to a request carrying no `Authorization` header at
+all.
 
 Resolved in this order, and the first hit wins:
 
@@ -353,9 +374,28 @@ if you would rather it did:
 { "provider": { "openai": { "options": { "apiKeyFile": "/secrets/openai" } } } }
 ```
 
-`/providers` prints every provider with its base url and whether a key was found;
-`/models` prints what the config can actually reach. A provider with no `models`
-block cannot be listed, because nothing in the config says which ids it serves.
+`/providers` prints every provider with its base url and whether a key was found,
+which is a statement about what you have configured. `/models` prints what can
+actually be used, marking each one `(no api key)` unless it resolves — so the free
+model is listed as available while the gateway beside it is not. A provider with
+no `models` block cannot be listed, because nothing in the config says which ids
+it serves.
+
+A model that needs no credential declares it with `"apiKey": false`, which is how
+the built-in default is declared. Use it for a self-hosted endpoint, or any other
+model that answers unauthenticated:
+
+```json
+{ "model": "mylocal/llama3",
+  "provider": { "mylocal": {
+    "options": { "baseURL": "http://192.168.1.5:11434/v1" },
+    "models": { "llama3": { "name": "Llama 3", "apiKey": false } } } } }
+```
+
+Without that, and with no key, the model is refused by name before any request is
+made — the gateway's own 401 says only *"Missing API key."*, which leaves you
+guessing between the three places a key can go. A local endpoint needs an allowlist
+rule as well; see [What it needs](#what-it-needs).
 
 ## Use
 
