@@ -346,8 +346,21 @@ local function run(argv)
     say(string.format("  ok    %-26s %7d bytes", entry[1], entry[2]))
   end
 
+  -- `./` is not decoration. A ComputerCraft shell finds a program by name on the
+  -- program path, which on a computer is `/rom/programs` -- a directory that is
+  -- read-only, so nothing can be installed there and a bare name never resolves.
+  -- A name containing a slash is resolved against the current directory instead,
+  -- which is where these files were just written. So `./init.lua` works and
+  -- `init.lua` need not, and `shell.run` needs the same `./` for the same reason:
+  -- it goes through the same lookup.
+  --
+  -- `opencode init.lua` is what a shell on a desktop would take, and it is wrong
+  -- twice over here: no such program is installed, and its argument would be read
+  -- as a question to send the model.
+  local program = bundle and "opencode.lua" or "init.lua"
   say(string.format("installed %d file(s), %d bytes, into %s", #list, bytes, DIR))
-  say("run it with:  opencode " .. (bundle and "opencode.lua" or "init.lua"))
+  say("run it with:  ./" .. program)
+  say("or in Lua:    shell.run(\"./" .. program .. "\")")
   return 0
 end
 

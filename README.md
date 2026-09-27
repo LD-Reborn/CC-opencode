@@ -38,7 +38,7 @@ Get it onto the computer the same way you would any other file, then run it:
 
 ```
 wget https://raw.githubusercontent.com/LD-Reborn/CC-opencode/main/dist/install.lua install
-install
+./install
 ```
 
 ```
@@ -82,7 +82,7 @@ inlined. Nothing to keep in sync, and it is the better choice on a small disk:
 
 ```
 wget https://raw.githubusercontent.com/LD-Reborn/CC-opencode/main/dist/opencode.lua opencode
-opencode
+./opencode
 ```
 
 `wget` takes the url and then the name to save under. `pastebin <url> opencode`
@@ -105,13 +105,56 @@ init.lua              the entry point
 src/                  the library: one module per concern
 ```
 
-`init.lua` adds its own directory to `package.path` at startup, so
-`/init.lua` plus `/src/` works with no arguments and no `package.path` editing,
-and you can read the source on the computer. `install` prints the command to run
-when it finishes.
+`init.lua` puts three absolute entries at the front of `package.path` at startup,
+so `/init.lua` beside `/src/` works with no arguments and no `package.path`
+editing, and you can read the source on the computer. The absoluteness is the
+whole of the fix, and it is worth knowing why: ComputerCraft gives every program
+its own `require`, and its search path joins a *relative* pattern onto the
+program's own directory. The entry point sits beside `src/`, one level above the
+modules, so `require("util")` would look for `<dir>/util.lua`, find nothing, and
+kill the program on its first require — before it printed anything. A pattern
+beginning with `/` is the one case where that join is skipped, so that is the
+only form that works here.
+
+`install` prints the command to run when it finishes.
 
 Re-running `install` is how you update: every file is written again, so a pull
 on your side and an `install` on the computer is the whole cycle.
+
+### Running it
+
+The `./` is not decoration, and it is the one thing here that behaves differently
+from a shell you are used to.
+
+A ComputerCraft shell finds a program **by name** on the *program path*. On a
+computer that path is `/rom/programs` — a directory that is read-only, so nothing
+can be installed into it and a bare name never resolves to a file you put
+somewhere else. On a turtle the path also contains `.`, which is why the same
+program may well work there and not on a computer.
+
+A name containing a `/` is resolved against the **current directory** instead,
+and that is where the installer wrote the files. So:
+
+```
+./init.lua                            from the shell
+./opencode                            the single file
+shell.run("./init.lua")               from the Lua prompt
+```
+
+`shell.run` needs the `./` for exactly the same reason: it goes through the same
+lookup. If you would rather type bare names, put the directory on the program
+path yourself:
+
+```
+shell.setPath(".:/rom/programs")
+```
+
+Arguments work the usual way once it is running. CC hands a program its command
+line, so `./opencode "list the programs"` is one turn, and `./init.lua run "..."`
+spells the same thing out.
+
+`shell.setPath` is not sticky across a reboot, and a program on a turtle is
+already on the path, so this is only worth doing on a computer.
 
 ### What it needs
 
@@ -317,10 +360,14 @@ block cannot be listed, because nothing in the config says which ids it serves.
 ## Use
 
 ```
-opencode                    interactive, on a monitor if one is attached
-opencode "list the programs" one turn, print the answer, exit
-opencode run "..."           the same, spelled out
+./opencode                    interactive, on a monitor if one is attached
+./opencode "list the programs" one turn, print the answer, exit
+./opencode run "..."           the same, spelled out
 ```
+
+`./opencode` is the single file and `./init.lua` the modular tree; see
+[Running it](#running-it) for why the `./` is there. Everything after it is the
+same either way.
 
 | Flag | Effect |
 | --- | --- |
