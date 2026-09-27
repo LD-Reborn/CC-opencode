@@ -16,8 +16,8 @@ return function(t, mock)
   -- Every tool is registered exactly once, with a schema the provider accepts.
 
   local ids = registry.ids()
-  local expected = { "bash", "read", "write", "edit", "glob", "grep", "webfetch", "todowrite" }
-  t.eq(#ids, #expected, "all eight built-in tools are registered")
+  local expected = { "lua", "bash", "read", "write", "edit", "glob", "grep", "webfetch", "todowrite" }
+  t.eq(#ids, #expected, "all nine built-in tools are registered")
   local seen = {}
   for _, id in ipairs(ids) do
     t.eq(seen[id], nil, "tool '" .. id .. "' is not registered twice")
@@ -42,6 +42,7 @@ return function(t, mock)
 
   t.eq(#registry.ids({ read = false }), #expected - 1, "a disabled tool is left out")
   t.eq(#registry.ids({ read = false, bash = false }), #expected - 2, "several tools can be disabled at once")
+  t.eq(ids[1], "lua", "the lua tool is registered first")
   t.eq(#registry.ids({}), #expected, "an empty toggle table disables nothing")
 
   t.eq(registry.get("nope"), nil, "an unknown tool id resolves to nothing")
@@ -309,6 +310,42 @@ return function(t, mock)
   t.eq(abandoned.status, "completed", "a timed-out command is still reported")
   t.contains(abandoned.output, "<shell_metadata>", "a timeout is reported in shell metadata")
   t.contains(abandoned.output, "abandoned", "a command that cannot be killed is described as abandoned")
+
+  -- lua
+
+  mock.setup()
+  local ranLua = registry.execute("lua", { code = "print('hello from lua')" }, ctx())
+  t.eq(ranLua.status, "completed", "lua code that works completes")
+  t.contains(ranLua.output, "hello from lua", "print output is captured")
+
+  local noOutput = registry.execute("lua", { code = "local x = 1 + 1" }, ctx())
+  t.eq(noOutput.status, "completed", "lua code with no print completes")
+  t.eq(noOutput.output, "(no output)", "code with no print says so")
+
+  local multiPrint = registry.execute("lua", { code = "print('a') print('b') print('c')" }, ctx())
+  t.contains(multiPrint.output, "a", "first print is captured")
+  t.contains(multiPrint.output, "b", "second print is captured")
+  t.contains(multiPrint.output, "c", "third print is captured")
+
+  local compileErr = registry.execute("lua", { code = "this is not valid lua !!!" }, ctx())
+  t.eq(compileErr.status, "error", "a compile error is an error")
+  t.contains(compileErr.error, "compile error", "the compile error is reported")
+
+  local runtimeErr = registry.execute("lua", { code = "error('oops')" }, ctx())
+  t.eq(runtimeErr.status, "completed", "a runtime error is captured, not a tool failure")
+  t.contains(runtimeErr.output, "oops", "the runtime error message is in the output")
+
+  local mathResult = registry.execute("lua", { code = "print(6 * 7)" }, ctx())
+  t.contains(mathResult.output, "42", "lua can do math")
+
+  local loopResult = registry.execute("lua", { code = "for i=1,3 do print(i) end" }, ctx())
+  t.contains(loopResult.output, "1", "loops work")
+  t.contains(loopResult.output, "2", "loops work")
+  t.contains(loopResult.output, "3", "loops work")
+
+  t.contains(registry.execute("lua", {}, ctx()).error, "code argument is required", "missing code is an error")
+  t.contains(registry.execute("lua", { code = "  " }, ctx()).error, "code argument is required", "blank code is an error")
+  t.contains(registry.execute("lua", { code = "print(1)", timeout = -1 }, ctx()).error, "Invalid timeout value", "a negative timeout is an error")
 
   -- Output limits are applied by the registry, and tools that already truncated
   -- their own output are left alone.

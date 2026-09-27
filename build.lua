@@ -34,6 +34,7 @@ local FILES = {
   agent = LIBRARY .. "/agent.lua",
   ui = LIBRARY .. "/ui.lua",
   ["tool/registry"] = TOOLS .. "/registry.lua",
+  ["tool/lua"] = TOOLS .. "/lua.lua",
   ["tool/bash"] = TOOLS .. "/bash.lua",
   ["tool/read"] = TOOLS .. "/read.lua",
   ["tool/write"] = TOOLS .. "/write.lua",

@@ -15,6 +15,7 @@ local M = {}
 M.builtin = {}
 
 local BUILTIN_MODULES = {
+  "tool/lua",
   "tool/bash",
   "tool/read",
   "tool/write",

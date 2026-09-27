@@ -116,7 +116,7 @@ end
 --- Shorten a tool's input to one line, for the activity log.
 local function summarise(part)
   local input = part.state.input or {}
-  for _, key in ipairs({ "filePath", "path", "pattern", "command", "url" }) do
+  for _, key in ipairs({ "filePath", "path", "pattern", "command", "url", "code" }) do
     if type(input[key]) == "string" then
       local value = input[key]:gsub("\n", " ")
       if #value > 48 then
