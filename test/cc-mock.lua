@@ -327,15 +327,23 @@ end
 -- `readLine` returns nil, which is what a ComputerCraft terminal does when its
 -- user closes the program. Everything written is accumulated so a test can
 -- assert on the output.
-function M.screen(inputs)
+--- A screen for the program to draw on.
+--
+-- Wide by default, so an assertion about what was printed is not also an
+-- assertion about where it happened to wrap. A test that cares about narrow
+-- terminals passes the width, and there is one of those on purpose: wrapping is
+-- only visible at a width narrow enough to force it, and a roomy default hides
+-- it completely.
+function M.screen(inputs, size)
   local screen = {
     text = "",
     lines = {},
+    drawn = {},
     inputs = inputs or {},
     colour = nil,
     cursorBlink = nil,
     cursor = { 1, 1 },
-    size = { 40, 25 },
+    size = size or { 200, 50 },
     cleared = 0,
   }
   local function collect(text)
@@ -343,6 +351,19 @@ function M.screen(inputs)
     screen.text = screen.text .. text
     for _ in text:gmatch("\n") do
       screen.lines[#screen.lines + 1] = true
+    end
+    -- Each line as it was actually written, so a test can assert on the width of
+    -- every one of them. `text` as a whole cannot: it says nothing about where
+    -- the lines were broken, which is the only thing that matters on a screen
+    -- narrow enough to have broken them.
+    local at = 1
+    while at <= #text do
+      local stop = text:find("\n", at, true)
+      screen.drawn[#screen.drawn + 1] = text:sub(at, (stop or (#text + 1)) - 1)
+      if not stop then
+        break
+      end
+      at = stop + 1
     end
   end
   -- ComputerCraft calls a screen's methods with a dot (`term.write(text)`), so

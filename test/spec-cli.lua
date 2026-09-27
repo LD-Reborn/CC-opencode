@@ -89,6 +89,32 @@ return function(t, mock)
   end
 
   do
+    -- A ComputerCraft screen discards anything written past its right edge rather
+    -- than continuing it on the next row, so an unwrapped line is not ugly, it is
+    -- incomplete. 51 columns is what a real Computer or Turtle gives you, and an
+    -- error is exactly the kind of message that overruns it.
+    local init = assert(loadInit())
+    local screen = mock.screen({ "/exit" }, { 51, 19 })
+    init.main({ "--model", "groq/llama-3.3-70b" }, screen)
+
+    for _, drawn in ipairs(screen.drawn) do
+      t.ok(#drawn <= 51, "nothing is drawn past the right edge: [" .. drawn .. "]")
+    end
+    t.contains(screen.text, "No API key for provider 'groq'", "and the message is still all there")
+    t.contains(screen.text, "GROQ_API_KEY", "including the part that names the variable to set")
+    t.contains(screen.text, "or env.", "and the end of it, which is what used to be lost")
+  end
+
+  do
+    -- The width is read from the screen rather than hardcoded, so the identical
+    -- error fits on one line on a wide monitor and only wraps on a narrow one.
+    local init = assert(loadInit())
+    local wide = mock.screen({ "/exit" }, { 200, 40 })
+    init.main({ "--model", "groq/llama-3.3-70b" }, wide)
+    t.contains(wide.text, "No API key for provider 'groq'", "the same message is reported when there is room")
+  end
+
+  do
     local init = assert(loadInit())
     local state = init.setup({ "--model", "ollama/llama3", "--agent", "plan", "--save", "--stream" }, mock.screen({}))
 

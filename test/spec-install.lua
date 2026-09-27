@@ -114,6 +114,34 @@ return function(t, mock)
     end
   end
 
+  -- The installer has to wrap what it prints.
+  --
+  -- ComputerCraft's `print` does not wrap either, and what the installer has to
+  -- say is exactly what overruns a 51-column terminal: a base url, a file size, a
+  -- size mismatch. An unwrapped line is not merely ugly, the part past the right
+  -- edge is discarded and never arrives, so the half carrying the actual error is
+  -- the half that is lost.
+  --
+  -- The generated program is not run through a screen in this suite, so this is
+  -- checked structurally: it asks the terminal how wide it is, and no long literal
+  -- reaches `print` directly.
+
+  do
+    local source = env.read(installerPath)
+    t.contains(source, "term.getSize", "the installer asks the terminal how wide it is")
+    t.contains(source, "local function say(text)", "and prints through a wrapper rather than print")
+    -- One assertion, not one per line: a long literal reaching print is a bug
+    -- worth naming, and three hundred identical passes are not.
+    local offender
+    for line in source:gmatch("[^\n]+") do
+      if #line >= 51 and line:match('print%("[^"]*"') then
+        offender = line
+        break
+      end
+    end
+    t.eq(offender, nil, "no long literal goes straight to print: " .. tostring(offender))
+  end
+
   -- The repository and branch baked in by `install.lua`.
 
   do

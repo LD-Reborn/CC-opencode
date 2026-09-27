@@ -541,6 +541,48 @@ function M.byteLabel(bytes)
   return string.format("%d bytes", bytes)
 end
 
+--- Break text into lines no wider than `width`, preferring to break at a space.
+--
+-- ComputerCraft's `write` does not wrap: anything past the right edge is not
+-- merely ugly, it is discarded, and the rest of the line does not appear on the
+-- next row. A computer's terminal is 51 columns, which is narrower than a url
+-- and narrower than most error messages, so without this the interesting end of
+-- a long line is exactly the part that never arrives.
+--
+-- A hard cut is the fallback rather than the rule. Most messages have a space
+-- near the margin, and breaking there keeps the first line readable instead of
+-- ending it mid-word.
+function M.wrap(text, width)
+  width = math.max(8, math.floor(tonumber(width) or 51))
+  local lines = {}
+  -- The trailing newline guarantees the last paragraph is seen, so text without
+  -- one is not silently dropped.
+  for paragraph in (tostring(text) .. "\n"):gmatch("([^\n]*)\n") do
+    if paragraph == "" then
+      lines[#lines + 1] = ""
+    else
+      local rest = paragraph
+      while #rest > width do
+        -- The last space at or before the margin. `.*` is greedy, so this finds
+        -- the last one rather than the first.
+        local space = rest:sub(1, width + 1):match("^.*()%s")
+        local take
+        if space and space >= math.floor(width / 2) then
+          take = space - 1 -- stop before the space, and let the next line have it
+        else
+          -- No space, or one so early that breaking there would leave a scrap of
+          -- a line. Either way, fill this one and keep the progress.
+          take = width
+        end
+        lines[#lines + 1] = rest:sub(1, take)
+        rest = (rest:sub(take + 1):gsub("^%s+", ""))
+      end
+      lines[#lines + 1] = rest
+    end
+  end
+  return lines
+end
+
 return M
 
 end
@@ -4741,6 +4783,7 @@ end
 bootstrap()
 
 local env = require("environment")
+local util = require("util")
 local config = require("config")
 local provider = require("provider")
 local session = require("session")
@@ -4770,8 +4813,23 @@ local function out(monitor, text, colour)
   monitor.setTextColor(WHITE)
 end
 
+--- The terminal's width, or 51, which is what a Computer or Turtle gives you.
+local function columns(monitor)
+  local ok, width = pcall(function()
+    return monitor.getSize()
+  end)
+  if ok and type(width) == "number" and width > 0 then
+    return width
+  end
+  return 51
+end
+
+-- Every line the program draws goes through here, so wrapping once means no
+-- message can be silently cut off: not an error, not a url, not a tool's output.
 local function line(monitor, text, colour)
-  out(monitor, text .. "\n", colour)
+  for _, part in ipairs(util.wrap(text, columns(monitor))) do
+    out(monitor, part .. "\n", colour)
+  end
 end
 
 --- Shorten a tool's input to one line, for the activity log.

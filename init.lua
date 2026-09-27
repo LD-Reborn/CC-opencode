@@ -25,6 +25,7 @@ end
 bootstrap()
 
 local env = require("environment")
+local util = require("util")
 local config = require("config")
 local provider = require("provider")
 local session = require("session")
@@ -54,8 +55,23 @@ local function out(monitor, text, colour)
   monitor.setTextColor(WHITE)
 end
 
+--- The terminal's width, or 51, which is what a Computer or Turtle gives you.
+local function columns(monitor)
+  local ok, width = pcall(function()
+    return monitor.getSize()
+  end)
+  if ok and type(width) == "number" and width > 0 then
+    return width
+  end
+  return 51
+end
+
+-- Every line the program draws goes through here, so wrapping once means no
+-- message can be silently cut off: not an error, not a url, not a tool's output.
 local function line(monitor, text, colour)
-  out(monitor, text .. "\n", colour)
+  for _, part in ipairs(util.wrap(text, columns(monitor))) do
+    out(monitor, part .. "\n", colour)
+  end
 end
 
 --- Shorten a tool's input to one line, for the activity log.

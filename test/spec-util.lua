@@ -91,4 +91,43 @@ return function(t)
   os.sleep = savedSleep
   t.ok(ok, "sleep works through the timer fallback")
   t.eq(pulled, 1, "the timer fallback pulls exactly one event")
+
+  -- wrap
+  --
+  -- ComputerCraft discards anything written past the right edge rather than
+  -- continuing it on the next row, so this is what stands between a long error
+  -- message and the half of it that never reaches the screen.
+
+  t.eq(#util.wrap("hi", 51), 1, "a short line is one line")
+  t.eq(util.wrap("hi", 51)[1], "hi", "and is unchanged")
+  t.eq(#util.wrap("", 51), 1, "an empty string is still one line, so the newline is not lost")
+  t.eq(util.wrap("a\nb", 51)[2], "b", "an embedded newline is respected")
+  t.eq(util.wrap("a\nb", 51)[1], "a", "on both sides")
+  t.eq(#util.wrap("a\n\nb", 51), 3, "a blank line survives as a blank line")
+  t.eq(#util.wrap("a\nb", 51), 2, "text without a trailing newline is not dropped")
+
+  local long = "the server's http allowlist does not permit git.example"
+  local wrapped = util.wrap(long, 20)
+  t.ok(#wrapped > 1, "a long line is broken up")
+  for _, part in ipairs(wrapped) do
+    t.ok(#part <= 20, "every piece fits the width: " .. part)
+  end
+  t.eq(table.concat(wrapped, " "), long, "and nothing is lost or added")
+
+  t.eq(util.wrap("one two three four", 9)[1], "one two", "it breaks at a space near the margin")
+  t.eq(util.wrap("one two three four", 9)[2], "three", "not at the first one, which would leave a scrap")
+
+  t.eq(util.wrap("abcdefghij", 8)[1], "abcdefgh", "a word with no spaces fills the line")
+  t.eq(util.wrap("abcdefghij", 8)[2], "ij", "and the pieces are all there")
+  t.eq(#util.wrap("abcdefghij", 8), 2, "two pieces, rather than a third empty one")
+
+  -- A space in the first half is not worth breaking on, or the first line would
+  -- be one character long.
+  t.eq(util.wrap("a bcdefghijklmnopqrst", 10)[1], "a bcdefghi", "an early space is ignored in favour of progress")
+
+  t.eq(#util.wrap("x", 0), 1, "a nonsensical width does not loop forever")
+  t.eq(#util.wrap("x", nil), 1, "a missing width falls back to a default")
+  t.eq(#util.wrap("x", -5), 1, "a negative width is clamped")
+  t.eq(#util.wrap(nil, 20), 1, "nil text is one empty line rather than an error")
+  t.eq(#util.wrap(42, 20), 1, "a number is stringified")
 end

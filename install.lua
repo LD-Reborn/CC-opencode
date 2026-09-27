@@ -28,8 +28,13 @@
 -- The committed `dist/install.lua` is generated with `--repo`, so that it points
 -- at the public repository rather than at whichever remote it was built from.
 --
---   lua install.lua
---   lua install.lua --repo https://github.com/you/repo --branch main
+-- Run this *after* build.lua, never before. The bundle is one of the files whose
+-- size gets baked in here, so building afterwards leaves the installer expecting
+-- a size that no longer exists and every install failing its own staleness check.
+-- The two are otherwise independent, and this is the only ordering there is.
+--
+--   lua build.lua && lua install.lua --repo https://github.com/you/repo
+--   lua install.lua --branch release
 --   lua install.lua --url https://raw.githubusercontent.com/you/repo/main/
 --   lua install.lua --out /tmp/install.lua
 
@@ -296,12 +301,56 @@ local BUNDLE = @BUNDLE@
 -- directory still being the same when the last file arrives.
 local DIR = shell.dir()
 
+--- The terminal's width, or 51, which is what a Computer or Turtle gives you.
+local function columns()
+  local ok, width = pcall(function()
+    return term.getSize()
+  end)
+  if ok and type(width) == "number" and width > 0 then
+    return width
+  end
+  return 51
+end
+
+--- Print, wrapped to the terminal.
+--
+-- ComputerCraft's `print` does not wrap: a line wider than the terminal is
+-- discarded past the right edge rather than continued on the next row. This
+-- program has to say things like a base url and a size mismatch, both wider
+-- than 51 columns, and the half of a line that carries the actual error is the
+-- half that never arrives. Breaking at a space where there is one keeps a long
+-- line readable rather than cutting it mid-word.
+local function say(text)
+  local width = math.max(8, columns())
+  for paragraph in (tostring(text) .. "\n"):gmatch("([^\n]*)\n") do
+    if paragraph == "" then
+      print()
+    else
+      local rest = paragraph
+      while #rest > width do
+        -- `.*` is greedy, so this is the last space at or before the margin
+        -- rather than the first.
+        local space = rest:sub(1, width + 1):match("^.*()%s")
+        local take
+        if space and space >= math.floor(width / 2) then
+          take = space - 1 -- stop before the space
+        else
+          take = width -- nothing to break on, so fill the line
+        end
+        print(rest:sub(1, take))
+        rest = rest:sub(take + 1):gsub("^%s+", "")
+      end
+      print(rest)
+    end
+  end
+end
+
 -- Why the last attempt to find the raw files did not work, for the message the
 -- failure path prints.
 local DISCOVERY = ""
 
 local function fail(message)
-  print("install: " .. message)
+  say("install: " .. message)
   return 1
 end
 
@@ -420,10 +469,10 @@ local function discover(path, size)
   local list = candidates(REPO, BRANCH)
   local last
   for index, base in ipairs(list) do
-    print("trying " .. base)
+    say("trying " .. base)
     local body, err = fetch(base .. path)
     if body and #body == size then
-      print("found it")
+      say("found it")
       return base
     end
     last = err or ("got " .. #body .. " bytes, expected " .. size)
@@ -434,7 +483,7 @@ local function discover(path, size)
   -- Kept for the caller, which needs to tell a blocked host apart from a host
   -- that simply does not serve files this way.
   DISCOVERY = tostring(last)
-  print("no candidate worked; the last said: " .. DISCOVERY)
+  say("no candidate worked; the last said: " .. DISCOVERY)
   return nil
 end
 
@@ -471,40 +520,40 @@ local function run(argv)
     base = discover(probe[1], probe[2])
     if not base then
       if DISCOVERY:find("allowlist", 1, true) then
-        print("That is a server setting, not a network problem, and it is the")
-        print("usual reason an install cannot get started. Add to")
-        print("serverconfig/computercraft-server.toml, in the world folder:")
+        say("That is a server setting, not a network problem, and it is the")
+        say("usual reason an install cannot get started. Add to")
+        say("serverconfig/computercraft-server.toml, in the world folder:")
         print()
-        print("  [[http.rules]]")
-        print("  host = \"<the host>\"")
-        print("  action = \"allow\"")
-        print("  max_upload = 4194304")
-        print("  max_download = 16777216")
-        print("  timeout = 30000")
+        say("  [[http.rules]]")
+        say("  host = \"<the host>\"")
+        say("  action = \"allow\"")
+        say("  max_upload = 4194304")
+        say("  max_download = 16777216")
+        say("  timeout = 30000")
         print()
-        print("then restart the server. If that host is on your own network, the")
-        print("default $private deny rule refuses it by address first: remove the")
-        print("[[http.rules]] entry with action = \"deny\" as well.")
-        print("Alternatively, hand over a base url with:  install <base url>")
+        say("then restart the server. If that host is on your own network, the")
+        say("default $private deny rule refuses it by address first: remove the")
+        say("[[http.rules]] entry with action = \"deny\" as well.")
+        say("Alternatively, hand over a base url with:  install <base url>")
         return 2
       end
-      print("Could not work out where to download this repository from.")
+      say("Could not work out where to download this repository from.")
       if REPO == "" then
-        print("This installer was built without a repository url, so it has")
-        print("nowhere to look. Pass one, for example:")
-        print("  install https://raw.githubusercontent.com/you/repo/main/")
+        say("This installer was built without a repository url, so it has")
+        say("nowhere to look. Pass one, for example:")
+        say("  install https://raw.githubusercontent.com/you/repo/main/")
       else
-        print("The repository is " .. REPO .. ", branch " .. BRANCH .. ".")
-        print("If it is private, or the host is not one of those above, pass the")
-        print("url by hand:")
-        print("  install <base url>")
+        say("The repository is " .. REPO .. ", branch " .. BRANCH .. ".")
+        say("If it is private, or the host is not one of those above, pass the")
+        say("url by hand:")
+        say("  install <base url>")
       end
       return 2
     end
   end
   base = base:gsub("/+$", "") .. "/"
 
-  print("installing " .. #list .. " file(s) from " .. base .. " into " .. DIR)
+  say("installing " .. #list .. " file(s) from " .. base .. " into " .. DIR)
   local bytes, done = 0, 0
   for _, entry in ipairs(list) do
     local ok, err = one(base, entry)
@@ -514,17 +563,17 @@ local function run(argv)
       -- would spend twenty more requests to learn nothing, and would leave a
       -- half-written tree behind. Running `install` again is the fix, and it is
       -- safe: every file is simply written again.
-      print(string.format("  FAIL  %-26s %s", entry[1], err))
-      print(string.format("stopped at %d of %d file(s); %d were written to %s", done, #list, done, DIR))
+      say(string.format("  FAIL  %-26s %s", entry[1], err))
+      say(string.format("stopped at %d of %d file(s); %d were written to %s", done, #list, done, DIR))
       return 1
     end
     done = done + 1
     bytes = bytes + entry[2]
-    print(string.format("  ok    %-26s %7d bytes", entry[1], entry[2]))
+    say(string.format("  ok    %-26s %7d bytes", entry[1], entry[2]))
   end
 
-  print(string.format("installed %d file(s), %d bytes, into %s", #list, bytes, DIR))
-  print("run it with:  opencode " .. (bundle and "opencode.lua" or "init.lua"))
+  say(string.format("installed %d file(s), %d bytes, into %s", #list, bytes, DIR))
+  say("run it with:  opencode " .. (bundle and "opencode.lua" or "init.lua"))
   return 0
 end
 
