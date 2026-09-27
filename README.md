@@ -526,6 +526,18 @@ This is a port, and the port is not cosmetic. The things that differ:
   and every `ask` permission rule denied without ever putting the question to
   anyone. Both now go through `read`, and the mock no longer offers a `readLine`
   for the program to agree with.
+- **A screen does not wrap.** `term.write` does not carry a line that overruns the
+  right edge onto the next row; the tail is discarded, so on a 51-column terminal
+  the end of every long line, the tail of every url, and the part of an error
+  message that says what to do about it never arrive. The screen adapter in
+  `src/environment.lua` is where the wrapping lives, not the REPL: it is the one
+  place every drawn character passes through, so a new caller cannot get it wrong
+  by forgetting, and it carries the column between writes because a reply arrives
+  in pieces. It is worth knowing this was found the hard way — the answer itself
+  was written raw while everything *around* it wrapped, so asking for a list of
+  files lost every path past column 51. The mock's screen now discards an
+  overlong row the way ComputerCraft does, and records how many characters were
+  lost, so `lost == 0` is an assertion the suite makes.
 - **`shell` is not a global.** It is a standard program that injects its API into
   the programs it launches, so it is present when the shell runs you and absent
   otherwise. Everything that needs the shell goes through the environment module,

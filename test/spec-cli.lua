@@ -593,6 +593,86 @@ return function(t, mock)
   -- Screens
 
   do
+    -- The answer is the one thing the REPL never wrapped: it arrives as a single
+    -- delta and used to be written straight out, so asking for a list of files —
+    -- long paths, no spaces to break at — lost everything past the right edge.
+    -- 51 columns is what a Computer gives you, and the mock throws away an
+    -- overlong row the way ComputerCraft does, so `lost` is the assertion that
+    -- matters: the text is on the screen, or it is not anywhere.
+    local init = assert(loadInit())
+    local screen = mock.screen({}, { 51, 19 })
+    local paths = {}
+    for i = 1, 6 do
+      paths[i] = "/rom/modules/" .. string.rep("nested_", 4) .. i .. ".lua"
+    end
+    mock.respond(textTurn("These are the files:\n" .. table.concat(paths, "\n") .. "\nThat is all of them."))
+    local code = init.main({ "list the files" }, screen)
+
+    t.eq(code, 0, "a reply longer than the screen is answered")
+    t.eq(screen.lost, 0, "and nothing was written past the right edge")
+    for _, path in ipairs(paths) do
+      t.contains(screen.text, path, "every path in the answer is on the screen")
+    end
+    t.contains(screen.text, "That is all of them.", "including the end of it")
+    t.ok(#screen.lines >= 8, "which took more rows than one line to fit")
+  end
+
+  do
+    -- The same answer, but delivered in pieces, as `--stream` delivers it. The
+    -- column has to be carried from one piece to the next: three fragments of
+    -- forty characters are a hundred and twenty, and wrapping each on its own
+    -- would put the second and third in the wrong place and lose the rest.
+    local init = assert(loadInit())
+    local screen = mock.screen({}, { 51, 19 })
+    local first, second, third = ("ab"):rep(20), ("cd"):rep(20), "the end"
+    mock.respond({
+      status = 200,
+      body = table.concat({
+        'data: {"choices":[{"delta":{"content":' .. json.encode(first) .. "}}]}",
+        'data: {"choices":[{"delta":{"content":' .. json.encode(second) .. "}}]}",
+        'data: {"choices":[{"delta":{"content":' .. json.encode(third) .. "}}]}",
+        'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}',
+        "data: [DONE]",
+      }, "\n"),
+    })
+    local code = init.main({ "--stream", "go on" }, screen)
+
+    t.eq(code, 0, "a streamed reply is answered")
+    t.eq(screen.lost, 0, "and a reply in three pieces loses nothing")
+    -- The exact join is the assertion that matters. The first piece is 40
+    -- characters, so the second has 10 columns left on the row and the rest of
+    -- it continues underneath. Wrapping each piece as though it began a row --
+    -- which is what happens when the column is not carried between writes --
+    -- puts 120 characters side by side instead and reads as if nothing wrapped.
+    t.contains(
+      screen.text,
+      first .. second:sub(1, 10) .. "\n" .. second:sub(11) .. third,
+      "the row is filled to the margin and the rest of the piece continues underneath"
+    )
+    t.contains(screen.text, third, "right through to the last word of it")
+  end
+
+  do
+    -- A permission question is drawn by a different module and used to be written
+    -- raw as well, so a long one — a path, an unfamiliar command — was cut off at
+    -- the very moment the operator needed to read what they were approving.
+    local init = assert(loadInit())
+    mock.attach({})
+    writeConfig({
+      model = "ollama/llama3",
+      permission = { { permission = "read", pattern = "*", action = "ask" } },
+    })
+    local screen = mock.screen({ "n" }, { 51, 19 })
+    mock.respond(toolTurn("read", json.encode({ filePath = mock.root .. "/notes.txt" })))
+    mock.respond(textTurn("I did not read it."))
+    local code = init.main({ "read the notes" }, screen)
+
+    t.eq(code, 0, "a call that has to be approved is attempted")
+    t.contains(screen.text, "Permission denied", "and refusing it goes through")
+    t.eq(screen.lost, 0, "with the question itself fitting the screen")
+  end
+
+  do
     local init = assert(loadInit())
     local screen = mock.screen({})
     mock.attach({ left = screen })

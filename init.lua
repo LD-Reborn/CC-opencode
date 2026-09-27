@@ -67,7 +67,6 @@ end
 bootstrap()
 
 local env = require("environment")
-local util = require("util")
 local config = require("config")
 local provider = require("provider")
 local session = require("session")
@@ -97,23 +96,13 @@ local function out(monitor, text, colour)
   monitor.setTextColor(WHITE)
 end
 
---- The terminal's width, or 51, which is what a Computer or Turtle gives you.
-local function columns(monitor)
-  local ok, width = pcall(function()
-    return monitor.getSize()
-  end)
-  if ok and type(width) == "number" and width > 0 then
-    return width
-  end
-  return 51
-end
-
--- Every line the program draws goes through here, so wrapping once means no
--- message can be silently cut off: not an error, not a url, not a tool's output.
+-- The screen wraps whatever it is given, so this only adds the newline. The
+-- wrapping used to live here, which left the answer itself unwrapped: it arrives
+-- as one delta and was written straight out, so a reply that was a list of file
+-- paths lost everything past the right edge. It belongs on the screen instead,
+-- where the REPL, the tool log and the permission prompt all pass through.
 local function line(monitor, text, colour)
-  for _, part in ipairs(util.wrap(text, columns(monitor))) do
-    out(monitor, part .. "\n", colour)
-  end
+  out(monitor, tostring(text) .. "\n", colour)
 end
 
 --- Shorten a tool's input to one line, for the activity log.
@@ -388,7 +377,10 @@ end
 --
 -- The cursor and the line editing are `read`'s own business on ComputerCraft, so
 -- this neither blinks the cursor nor reads a key: it hands the question to the
--- same call the shell uses for its own command line.
+-- same call the shell uses for its own command line. `read` echoes what is typed
+-- and leaves the cursor wherever the operator finished, which the screen's
+-- wrapping knows nothing about — so the blank line the loop writes before the
+-- next prompt is what puts the two back in agreement.
 local function prompt()
   return env.readLine()
 end
@@ -529,7 +521,10 @@ end
 
 --- Program entry point. Returns the shell exit code.
 function M.main(argv, monitor)
-  monitor = monitor or env.terminal()
+  -- Adapted here as well as in `env.terminal`, so that a caller who passes a
+  -- screen of their own cannot end up with output that is not wrapped. A screen
+  -- ComputerCraft has already given us is wrapped by the same code either way.
+  monitor = env.screen(monitor or env.terminal())
   if not monitor then
     return 1
   end

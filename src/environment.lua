@@ -5,12 +5,17 @@
 -- mock with the same surface, which is how the agent loop is exercised without
 -- a Minecraft client.
 
+-- `util` is the only project module this one reaches for, and only for its
+-- word-breaking, because undoing a hardware habit belongs at the boundary with
+-- the hardware. It requires nothing back, so the dependency is one-way.
+local util = require("util")
+
 local M = {}
 
 M.isCC = type(shell) == "table" and type(fs) == "table"
 
 -- Defined here rather than required from `util` so the environment layer stays
--- the one module that depends on nothing else.
+-- the one module that knows about the two string primitives it needs itself.
 local function startswith(s, prefix)
   return s:sub(1, #prefix) == prefix
 end
@@ -353,6 +358,16 @@ end
 --
 -- Monitors and terminals are nearly the same API, but neither is a superset of
 -- the other, and the REPL should not have to care which one it got.
+--
+-- `write` is also where text is wrapped, and it is here rather than in the REPL
+-- for two reasons. It is the one place every drawn character passes through —
+-- a line of the conversation and a question from the permission prompt alike —
+-- so a new caller cannot get it wrong by forgetting. And it is a property of the
+-- hardware rather than of the interface: ComputerCraft does not carry a line
+-- that overruns its screen, so a 51-column terminal loses the end of every long
+-- line, the tail of every url, and the part of an error message that says what
+-- to do about it. The column is carried between calls because a reply arrives in
+-- pieces and each piece has to be broken knowing where the last one finished.
 local function adapt(screen)
   -- ComputerCraft calls these with a dot — `term.write(text)`, not
   -- `term:write(text)` — so the screen must not be passed back in.
@@ -363,10 +378,88 @@ local function adapt(screen)
     end
     return method(...)
   end
+
+  -- The column the next character will land in, counting from 1. Only what this
+  -- screen has been told moves it: `read` echoes onto the terminal and puts the
+  -- cursor somewhere this cannot see, which is why the REPL writes its blank
+  -- line before the next prompt and so re-synchronises it for free.
+  local column = 1
+
+  --- The usable width: the screen's, less the last column.
+  --
+  -- The last column is left alone on purpose. Filling it is what puts a
+  -- ComputerCraft screen in a state where what happens next depends on the
+  -- version — continued on the next row, or thrown away — and neither is worth
+  -- betting a line of output on.
+  local function limit()
+    local ok, width = pcall(function()
+      return screen.getSize()
+    end)
+    if ok and type(width) == "number" and width >= 8 then
+      return width - 1
+    end
+    return 50
+  end
+
+  --- Write `text`, wrapped, with the newlines in it honoured.
+  local function write(text)
+    if text == nil then
+      return nil
+    end
+    text = tostring(text)
+    local rows = {}
+    local at = 1
+    while at <= #text do
+      local stop = text:find("\n", at, true)
+      local piece = text:sub(at, (stop or (#text + 1)) - 1)
+      if piece ~= "" then
+        local room = limit() - column + 1
+        -- Nothing worth wrapping into, so move along a row rather than break
+        -- words two characters at a time.
+        if room < 8 then
+          rows[#rows + 1] = "\n"
+          column = 1
+          room = limit()
+        end
+        if #piece > room then
+          -- Fill what is left of this row, breaking at a space where there is
+          -- one, then wrap the remainder at the full width rather than at
+          -- whatever happened to be left over. A reply that spills ten
+          -- characters past the margin has to carry on at full width: wrapping
+          -- the rest of it into a column ten wide would fit a third of it on
+          -- the screen.
+          local head = util.wrap(piece, room)[1]
+          rows[#rows + 1] = head
+          rows[#rows + 1] = "\n"
+          local rest = util.wrap(util.trim(piece:sub(#head + 1)), limit())
+          for i, row in ipairs(rest) do
+            rows[#rows + 1] = row
+            if i < #rest then
+              rows[#rows + 1] = "\n"
+            else
+              column = #row + 1
+            end
+          end
+        else
+          rows[#rows + 1] = piece
+          column = column + #piece
+        end
+      end
+      if stop then
+        rows[#rows + 1] = "\n"
+        column = 1
+        at = stop + 1
+      else
+        at = #text + 1
+      end
+    end
+    return call("write", table.concat(rows))
+  end
+
   return {
     raw = screen,
     isMonitor = screen ~= term,
-    write = function(text) return call("write", text) end,
+    write = write,
     clear = function() return call("clear") end,
     scroll = function() return call("scroll") end,
     setCursorBlink = function(state) return call("setCursorBlink", state) end,
@@ -375,6 +468,23 @@ local function adapt(screen)
     getCursorPos = function() return call("getCursorPos") end,
     getSize = function() return call("getSize") end,
   }
+end
+
+--- Prepare a screen for drawing on, or nil.
+--
+-- `M.terminal` is the usual way in; this is for a screen the caller already has.
+-- It exists so that there is no way to hand the program something it will draw
+-- on without the text being wrapped: the wrapping is the adapter's, and a raw
+-- screen is not adapted, so every path in has to come through here. Adapting an
+-- adapted screen gives it straight back, so there is no order to get right.
+function M.screen(raw)
+  if raw == nil then
+    return nil
+  end
+  if raw.raw ~= nil then
+    return raw
+  end
+  return adapt(raw)
 end
 
 --- The best available screen, or nil when there is neither a monitor nor a

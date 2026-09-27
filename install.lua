@@ -320,8 +320,14 @@ end
 -- than 51 columns, and the half of a line that carries the actual error is the
 -- half that never arrives. Breaking at a space where there is one keeps a long
 -- line readable rather than cutting it mid-word.
+--
+-- One column is left spare, for the same reason the library's screen adapter
+-- leaves it: filling the last column is what makes what happens next depend on
+-- the version, and this is the first thing anyone sees. It is a separate program
+-- from the library, running before it exists, so it does its own wrapping and
+-- cannot borrow the adapter's.
 local function say(text)
-  local width = math.max(8, columns())
+  local width = math.max(8, columns() - 1)
   for paragraph in (tostring(text) .. "\n"):gmatch("([^\n]*)\n") do
     if paragraph == "" then
       print()

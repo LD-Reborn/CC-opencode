@@ -501,25 +501,37 @@ function M.screen(inputs, size, notATerminal)
     cursor = { 1, 1 },
     size = size or { 200, 50 },
     cleared = 0,
+    lost = 0,
   }
   local function collect(text)
     text = tostring(text)
-    screen.text = screen.text .. text
-    for _ in text:gmatch("\n") do
-      screen.lines[#screen.lines + 1] = true
-    end
-    -- Each line as it was actually written, so a test can assert on the width of
-    -- every one of them. `text` as a whole cannot: it says nothing about where
-    -- the lines were broken, which is the only thing that matters on a screen
-    -- narrow enough to have broken them.
+    -- ComputerCraft does not carry a line that overruns its screen: the tail is
+    -- discarded, not continued on the next row. Modelling that is the point. A
+    -- screen that accepted every length would let a program with no wrapping at
+    -- all pass, and the symptom on hardware is text that silently stops halfway
+    -- across — which is exactly what it did here, with the whole of the model's
+    -- answer written straight out past the right edge.
     local at = 1
     while at <= #text do
       local stop = text:find("\n", at, true)
-      screen.drawn[#screen.drawn + 1] = text:sub(at, (stop or (#text + 1)) - 1)
-      if not stop then
+      local row = text:sub(at, (stop or (#text + 1)) - 1)
+      -- `drawn` is what the program handed over, so a test can say whether the
+      -- program wrapped; `text` and `lost` are what the screen did with it, so a
+      -- test can say whether the wrapping was enough. Asserting on the first and
+      -- getting the second for free is the whole arrangement.
+      screen.drawn[#screen.drawn + 1] = row
+      if #row > screen.size[1] then
+        screen.lost = screen.lost + (#row - screen.size[1])
+        row = row:sub(1, screen.size[1])
+      end
+      screen.text = screen.text .. row
+      if stop then
+        screen.text = screen.text .. "\n"
+        screen.lines[#screen.lines + 1] = true
+        at = stop + 1
+      else
         break
       end
-      at = stop + 1
     end
   end
   -- ComputerCraft calls a screen's methods with a dot (`term.write(text)`), so
