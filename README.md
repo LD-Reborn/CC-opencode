@@ -1,5 +1,9 @@
 # CC-opencode
 
+> **Disclaimer:** This project is neither affiliated with, nor condoned by the
+> [opencode](https://github.com/sst/opencode) project. It is an independent effort
+> to make agentic coding available to ComputerCraft.
+
 An opencode-style coding agent that runs inside a ComputerCraft:Tweaked computer in
 Minecraft. It talks to any OpenAI-compatible endpoint, and the model it talks to
 can read and write files, run programs, search the filesystem, and fetch URLs —
