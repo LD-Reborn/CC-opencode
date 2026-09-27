@@ -13,7 +13,7 @@
 local BASE = ""
 
 -- Otherwise the installer looks for the raw files itself, under this repository.
-local REPO = "https://github.com/LD-Reborn/CC-opencode"
+local REPO = "https://git.ld50.dev/lucretia/CC-opencode"
 local BRANCH = "main"
 
 -- CC-GUI, which the interface is built on. A separate project in a separate
@@ -51,11 +51,11 @@ local FILES = {
   { "src/tool/webfetch.lua", 3373, "src/tool/webfetch.lua" },
   { "src/tool/write.lua", 2421, "src/tool/write.lua" },
   { "src/truncate.lua", 3232, "src/truncate.lua" },
-  { "src/ui.lua", 51335, "src/ui.lua" },
+  { "src/ui.lua", 51434, "src/ui.lua" },
   { "src/util.lua", 5452, "src/util.lua" }
 }
 
-local BUNDLE = { "dist/opencode.lua", 242073, "opencode.lua" }
+local BUNDLE = { "dist/opencode.lua", 242190, "opencode.lua" }
 
 -- Where the files land. Decided once, here, rather than relying on the shell's
 -- directory still being the same when the last file arrives.

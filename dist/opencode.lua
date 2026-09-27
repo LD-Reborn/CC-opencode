@@ -6000,7 +6000,7 @@ function U:blit(x, y, width, height, text, foreground, background)
   if clipped == "" then
     return false
   end
-  GUI.drawText(self.screen, x, y, foreground, background, clipped)
+  GUI.drawText(self.screen, x, y, foreground or WHITE, background or BLACK, clipped)
   return true
 end
 
@@ -6222,6 +6222,8 @@ function U:handle(event)
     elseif key == "fin" then
       return { action = "end" }
     end
+    -- Every other key press goes to CC-GUI, which owns the text editing.
+    self:delegate(event)
     return nil
   end
 
