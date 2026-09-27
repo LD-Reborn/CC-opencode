@@ -384,11 +384,13 @@ local function reportStop(monitor, message, reason)
   line(monitor, tostring(reason), YELLOW)
 end
 
-local function prompt(monitor)
-  monitor.setCursorBlink(true)
-  local answer = monitor.readLine()
-  monitor.setCursorBlink(false)
-  return answer
+--- Read one line from the operator, or nil at end of input.
+--
+-- The cursor and the line editing are `read`'s own business on ComputerCraft, so
+-- this neither blinks the cursor nor reads a key: it hands the question to the
+-- same call the shell uses for its own command line.
+local function prompt()
+  return env.readLine()
 end
 
 local function finish(monitor)
@@ -403,7 +405,7 @@ local function repl(monitor)
   while true do
     line(monitor, "")
     out(monitor, "> ", LIGHT_GRAY)
-    local input = prompt(monitor)
+    local input = prompt()
     if input == nil then
       return
     end

@@ -5,6 +5,7 @@
 -- session are appended to the session ruleset so later calls are silent.
 
 local util = require("util")
+local env = require("environment")
 
 local M = {}
 
@@ -44,15 +45,19 @@ function M.evaluateAll(permission, patterns, ...)
   return M.ALLOW
 end
 
---- Read a single line from a monitor, returning nil on end of input.
+--- Ask the operator one question, returning "n" at end of input.
+--
+-- The answer comes from CraftOS's `read`, not from a screen: `term` has no
+-- `readLine`, so a screen answered nil here, and nil was read as "no" -- which
+-- made every `ask` rule deny silently, with no question ever put to anyone. An
+-- unattended denial is the safe direction to fail, but a prompt that cannot be
+-- seen is not a prompt.
 local function prompt(question, monitor)
-  if not monitor or not term then
+  if not monitor or not term or not env.isCC then
     return "n"
   end
   monitor.write(question)
-  monitor.setCursorBlink(true)
-  local line = monitor.readLine()
-  monitor.setCursorBlink(false)
+  local line = env.readLine()
   if line == nil then
     return "n"
   end

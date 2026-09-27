@@ -439,6 +439,19 @@ function M.install()
   _G.term = nil
   _G.peripheral = nil
   M.sleeps = 0
+  M.currentScreen = nil
+  -- CraftOS's `read`, as a global, answering from the current screen's queue and
+  -- nil once it is empty -- which is what a real terminal does when the operator
+  -- closes the program. Overwriting the host's `io.read` on purpose: the program
+  -- env inherits globals, and a test that let the real one through would block on
+  -- stdin instead of failing.
+  _G.read = function()
+    local screen = M.currentScreen
+    if not screen or #screen.inputs == 0 then
+      return nil
+    end
+    return table.remove(screen.inputs, 1)
+  end
   _G.os.sleep = function(seconds)
     M.sleeps = M.sleeps + (seconds or 0)
   end
@@ -472,7 +485,12 @@ end
 -- terminals passes the width, and there is one of those on purpose: wrapping is
 -- only visible at a width narrow enough to force it, and a roomy default hides
 -- it completely.
-function M.screen(inputs, size)
+--
+-- `notATerminal` marks a screen as a monitor rather than the terminal, which
+-- matters because `read` is a global reading the terminal: output can go to a
+-- monitor while the answers still come from the keyboard. The most recently
+-- created ordinary screen stands in for the terminal.
+function M.screen(inputs, size, notATerminal)
   local screen = {
     text = "",
     lines = {},
@@ -510,10 +528,12 @@ function M.screen(inputs, size)
   screen.write = function(text)
     collect(text)
   end
-  screen.readLine = function()
-    screen.blank = true
-    return table.remove(screen.inputs, 1)
-  end
+  -- Deliberately no `readLine`. The real `term` module has no such method, and
+  -- supplying one here is what let a program that called it pass: the mock
+  -- answered, real hardware returned nil, and nil was read as end of input, so
+  -- the REPL exited after its banner and every permission prompt denied in
+  -- silence. A mock that offers an API the target does not have will happily
+  -- pass code that cannot run, which is the whole reason this file exists.
   screen.clear = function()
     screen.cleared = screen.cleared + 1
   end
@@ -533,7 +553,37 @@ function M.screen(inputs, size)
   screen.getSize = function()
     return screen.size[1], screen.size[2]
   end
+  -- CraftOS's `read` is a global that reads from the terminal, not a method on
+  -- whichever screen the program happens to be drawing on, and it is how the
+  -- shell reads its own command line. Modelling that matters: it means a test
+  -- cannot accidentally pass by putting the answers on a monitor.
+  if not notATerminal then
+    M.currentScreen = screen
+  end
+  -- The invariant, asserted where it is established rather than in a spec: a
+  -- screen answers nil for any method it does not have, exactly as a ComputerCraft
+  -- peripheral does, and `nil` is what "the operator closed the program" looks
+  -- like. A mock that grows a method the target lacks will pass code that cannot
+  -- run, and the symptom on hardware is a program that exits in silence.
+  screen.readLine = nil
   return screen
+end
+
+--- The answers `read` will hand out, in order; nil once they run out.
+--
+-- Read from the most recently created screen, which is the terminal as far as
+-- `read` is concerned. Kept as a function rather than a closure over one screen
+-- because the permission tests build a screen to draw the question on and then
+-- answer it, and that is the same arrangement a computer has.
+function M.answers(...)
+  local screen = M.currentScreen
+  if not screen then
+    return nil
+  end
+  for _, answer in ipairs({ ... }) do
+    screen.inputs[#screen.inputs + 1] = answer
+  end
+  return nil
 end
 
 --- Attach screens to named peripherals, so `env.terminal()` has something to find.

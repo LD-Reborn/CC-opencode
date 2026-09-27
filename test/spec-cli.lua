@@ -371,11 +371,23 @@ return function(t, mock)
   -- The REPL
 
   do
+    -- The invariant, and the reason the suite was green while the program was not.
+    -- ComputerCraft's `term` has no `readLine`; input arrives through the global
+    -- `read`, which the shell uses for its own command line. Calling a screen for
+    -- `readLine` answers nil, and both callers read nil as end of input -- so on a
+    -- computer the REPL exited straight after its banner and every permission
+    -- prompt denied without asking. The mock used to hand out a `readLine` and so
+    -- agreed with the program and disagreed with the hardware.
+    local probe = mock.screen({})
+    t.eq(probe.readLine, nil, "a screen answers nil for readLine, as ComputerCraft does")
+    t.eq(type(read), "function", "and input arrives through CraftOS's global read")
+
     local init = assert(loadInit())
     local screen = mock.screen({ "/help", "/exit" })
     local code = init.main({}, screen)
 
-    t.eq(code, 0, "the REPL exits zero on /exit")
+    t.eq(code, 0, "the REPL reads its lines and exits zero on /exit")
+    t.eq(#screen.inputs, 0, "having consumed both of the answers it was given")
     t.contains(screen.text, "opencode for ComputerCraft", "the banner is printed")
     t.contains(screen.text, "/model", "/help lists the commands")
     t.contains(screen.text, "/exit", "/help lists every command")
@@ -594,13 +606,23 @@ return function(t, mock)
 
   do
     local init = assert(loadInit())
-    local screen = mock.screen({ "/help", "/exit" })
-    mock.attach({ monitor_1 = screen })
+    -- The answers go on the terminal, the drawing on the monitor, which is the
+    -- arrangement a computer with a screen attached actually has. CC's `read` is a
+    -- global on the terminal, so a program that read from the screen it draws on
+    -- would work here and hang on a real multi-computer setup.
+    local terminal = mock.screen({ "/help", "/exit" })
+    -- Armed with a decoy. If the program asked the screen it was drawing on, it
+    -- would eat this and exit on the wrong line, which is the bug a
+    -- multi-computer setup would show and a single-screen test never could.
+    local monitor = mock.screen({ "/quit" }, { 200, 50 }, true)
+    mock.attach({ monitor_1 = monitor })
     local code = init.main({}, nil)
 
-    t.eq(code, 0, "the REPL reads from the monitor when one is attached")
-    t.contains(screen.text, "/exit", "the command list made it onto the monitor")
-    t.eq(screen.cursorBlink, false, "the cursor is left not blinking after the last read")
+    t.eq(code, 0, "the REPL runs with a monitor attached and no screen passed")
+    t.contains(monitor.text, "/exit", "the command list made it onto the monitor")
+    t.contains(monitor.text, "/help", "and so did the help it printed")
+    t.eq(#terminal.inputs, 0, "having taken both of its answers off the terminal")
+    t.eq(#monitor.inputs, 1, "and left the monitor's own queue untouched")
     mock.attach({})
   end
 

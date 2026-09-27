@@ -367,7 +367,6 @@ local function adapt(screen)
     raw = screen,
     isMonitor = screen ~= term,
     write = function(text) return call("write", text) end,
-    readLine = function() return call("readLine") end,
     clear = function() return call("clear") end,
     scroll = function() return call("scroll") end,
     setCursorBlink = function(state) return call("setCursorBlink", state) end,
@@ -394,6 +393,30 @@ function M.terminal()
     return adapt(term)
   end
   return nil
+end
+
+--- Read one line of input from the operator, or nil at end of input.
+--
+-- This is CraftOS's global `read`, not a method on a screen, and the difference
+-- is the whole of it. The `term` module is blit, clear, getCursorPos, getSize,
+-- native, redirect, scroll, setBackgroundColour, setCursorBlink, setCursorPos,
+-- setTextColour, and write -- there is no `readLine` on it. A screen asked for one
+-- answers nil, which is indistinguishable from the operator closing the program,
+-- and both callers here treated nil that way: the REPL exited straight after the
+-- banner, and every permission prompt denied without ever asking. CC's own shell
+-- reads its line this way, and gets line editing, history and tab completion for
+-- it, none of which a hand-rolled key loop would have matched.
+--
+-- Named `readLine` rather than `read` because `M.read` is already the file reader
+-- that `config` uses to fetch a key from disk, and one function cannot be both.
+--
+-- Wrapped rather than called as a global so that every CC API the project touches
+-- is still visible in this one file, and so the harness can stand in for it.
+function M.readLine()
+  if type(read) ~= "function" then
+    return nil
+  end
+  return read()
 end
 
 return M

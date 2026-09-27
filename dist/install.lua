@@ -18,15 +18,15 @@ local BRANCH = "main"
 
 -- fetch path, expected size, path to write
 local FILES = {
-  { "init.lua", 20104, "init.lua" },
+  { "init.lua", 20279, "init.lua" },
   { "src/agent.lua", 13912, "src/agent.lua" },
   { "src/config.lua", 6849, "src/config.lua" },
-  { "src/environment.lua", 9403, "src/environment.lua" },
+  { "src/environment.lua", 10568, "src/environment.lua" },
   { "src/http.lua", 9866, "src/http.lua" },
   { "src/json.lua", 9449, "src/json.lua" },
   { "src/llm.lua", 8315, "src/llm.lua" },
   { "src/pattern.lua", 13485, "src/pattern.lua" },
-  { "src/permission.lua", 3897, "src/permission.lua" },
+  { "src/permission.lua", 4221, "src/permission.lua" },
   { "src/prompt.lua", 7430, "src/prompt.lua" },
   { "src/provider.lua", 6448, "src/provider.lua" },
   { "src/session.lua", 7047, "src/session.lua" },
@@ -43,7 +43,7 @@ local FILES = {
   { "src/util.lua", 5452, "src/util.lua" }
 }
 
-local BUNDLE = { "dist/opencode.lua", 176416, "opencode.lua" }
+local BUNDLE = { "dist/opencode.lua", 178080, "opencode.lua" }
 
 -- Where the files land. Decided once, here, rather than relying on the shell's
 -- directory still being the same when the last file arrives.

@@ -1216,7 +1216,6 @@ local function adapt(screen)
     raw = screen,
     isMonitor = screen ~= term,
     write = function(text) return call("write", text) end,
-    readLine = function() return call("readLine") end,
     clear = function() return call("clear") end,
     scroll = function() return call("scroll") end,
     setCursorBlink = function(state) return call("setCursorBlink", state) end,
@@ -1243,6 +1242,30 @@ function M.terminal()
     return adapt(term)
   end
   return nil
+end
+
+--- Read one line of input from the operator, or nil at end of input.
+--
+-- This is CraftOS's global `read`, not a method on a screen, and the difference
+-- is the whole of it. The `term` module is blit, clear, getCursorPos, getSize,
+-- native, redirect, scroll, setBackgroundColour, setCursorBlink, setCursorPos,
+-- setTextColour, and write -- there is no `readLine` on it. A screen asked for one
+-- answers nil, which is indistinguishable from the operator closing the program,
+-- and both callers here treated nil that way: the REPL exited straight after the
+-- banner, and every permission prompt denied without ever asking. CC's own shell
+-- reads its line this way, and gets line editing, history and tab completion for
+-- it, none of which a hand-rolled key loop would have matched.
+--
+-- Named `readLine` rather than `read` because `M.read` is already the file reader
+-- that `config` uses to fetch a key from disk, and one function cannot be both.
+--
+-- Wrapped rather than called as a global so that every CC API the project touches
+-- is still visible in this one file, and so the harness can stand in for it.
+function M.readLine()
+  if type(read) ~= "function" then
+    return nil
+  end
+  return read()
 end
 
 return M
@@ -1869,6 +1892,7 @@ do end
 -- session are appended to the session ruleset so later calls are silent.
 
 local util = require("util")
+local env = require("environment")
 
 local M = {}
 
@@ -1908,15 +1932,19 @@ function M.evaluateAll(permission, patterns, ...)
   return M.ALLOW
 end
 
---- Read a single line from a monitor, returning nil on end of input.
+--- Ask the operator one question, returning "n" at end of input.
+--
+-- The answer comes from CraftOS's `read`, not from a screen: `term` has no
+-- `readLine`, so a screen answered nil here, and nil was read as "no" -- which
+-- made every `ask` rule deny silently, with no question ever put to anyone. An
+-- unattended denial is the safe direction to fail, but a prompt that cannot be
+-- seen is not a prompt.
 local function prompt(question, monitor)
-  if not monitor or not term then
+  if not monitor or not term or not env.isCC then
     return "n"
   end
   monitor.write(question)
-  monitor.setCursorBlink(true)
-  local line = monitor.readLine()
-  monitor.setCursorBlink(false)
+  local line = env.readLine()
   if line == nil then
     return "n"
   end
@@ -5234,11 +5262,13 @@ local function reportStop(monitor, message, reason)
   line(monitor, tostring(reason), YELLOW)
 end
 
-local function prompt(monitor)
-  monitor.setCursorBlink(true)
-  local answer = monitor.readLine()
-  monitor.setCursorBlink(false)
-  return answer
+--- Read one line from the operator, or nil at end of input.
+--
+-- The cursor and the line editing are `read`'s own business on ComputerCraft, so
+-- this neither blinks the cursor nor reads a key: it hands the question to the
+-- same call the shell uses for its own command line.
+local function prompt()
+  return env.readLine()
 end
 
 local function finish(monitor)
@@ -5253,7 +5283,7 @@ local function repl(monitor)
   while true do
     line(monitor, "")
     out(monitor, "> ", LIGHT_GRAY)
-    local input = prompt(monitor)
+    local input = prompt()
     if input == nil then
       return
     end

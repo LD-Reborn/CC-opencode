@@ -312,14 +312,14 @@ return function(t, mock)
 
   -- Approving "always" appends to the session so later calls are silent.
 
+  --- The monitor to ask on, with the operator's reply waiting on the terminal.
+  --
+  -- CC's `read` is a global reading from the terminal, not a method on the screen
+  -- being drawn on, so the reply is queued on a screen the mock treats as the
+  -- terminal. Building a bare table with a `readLine` on it would be the old
+  -- fiction again, and it would pass whether or not the program asked correctly.
   local function answering(reply)
-    return {
-      write = function() end,
-      setCursorBlink = function() end,
-      readLine = function()
-        return reply
-      end,
-    }
+    return mock.screen({ reply })
   end
 
   mock.setup()
@@ -330,8 +330,13 @@ return function(t, mock)
   local first = registry.execute("read", { filePath = mock.root .. "/quiet.txt" }, mock.context({ session = askSession, monitor = answering("a"), permission = {} }))
   t.eq(first.status, "completed", "approving runs the tool")
   t.eq(#askSession.permission, 1, "an always-approval is remembered on the session")
-  t.eq(askSession.permission[1].action, "allow", "the remembered rule allows")
-  t.eq(askSession.permission[1].pattern, mock.root .. "/quiet.txt", "the remembered rule names what was approved")
+  -- Read through `or {}` because an approval that was never asked for leaves
+  -- nothing here, and indexing that aborts the whole run on the first failure
+  -- instead of saying which expectation broke. That is the shape this bug took:
+  -- the prompt got nothing, denied in silence, and the tool never ran.
+  local remembered = askSession.permission[1] or {}
+  t.eq(remembered.action, "allow", "the remembered rule allows")
+  t.eq(remembered.pattern, mock.root .. "/quiet.txt", "the remembered rule names what was approved")
 
   mock.setup()
   _G.term = {}

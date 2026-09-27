@@ -516,6 +516,20 @@ This is a port, and the port is not cosmetic. The things that differ:
   table)`. Both failures happen on the first request, name neither the url nor
   the request, and appear only on real hardware. The mock reproduces both, so the
   suite catches them.
+- **There is no `term.readLine`.** Reading a line is CraftOS's global `read`, which
+  is what CC's own shell uses for its command line and brings line editing, history
+  and tab completion with it. `term` is blit, clear, getCursorPos, getSize, native,
+  redirect, scroll, setBackgroundColour, setCursorBlink, setCursorPos,
+  setTextColour, and write — and nothing else. A screen asked for a method it does
+  not have answers nil, which is indistinguishable from the operator closing the
+  program, so this one is worth stating: the REPL exited straight after its banner,
+  and every `ask` permission rule denied without ever putting the question to
+  anyone. Both now go through `read`, and the mock no longer offers a `readLine`
+  for the program to agree with.
+- **`shell` is not a global.** It is a standard program that injects its API into
+  the programs it launches, so it is present when the shell runs you and absent
+  otherwise. Everything that needs the shell goes through the environment module,
+  which is what decides whether there is one.
 - **A failed request is a return value, not an exception.** `http.get` answers
   `nil, message`, and behind them the failing response whenever the server said
   anything at all. The message is a bare reason phrase, so the status has to come
