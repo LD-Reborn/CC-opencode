@@ -98,15 +98,27 @@ return function(t, mock)
       t.ok(false, "could not load dist/install.lua: " .. tostring(err))
       return nil
     end
-    local previous = _G.arg
+    -- What it printed is part of what it does: the last two lines are the
+    -- instruction the operator is left with, and there is nothing else to tell
+    -- whether they can follow it. Capturing `print` also stops the usage text from
+    -- a failing case appearing in the middle of the suite's own output.
+    local printed = {}
+    local previous, realPrint = _G.arg, _G.print
+    _G.print = function(...)
+      local parts = {}
+      for index = 1, select("#", ...) do
+        parts[#parts + 1] = tostring((select(index, ...)))
+      end
+      printed[#printed + 1] = table.concat(parts, " ")
+    end
     _G.arg = args
     local ok, code = pcall(chunk)
-    _G.arg = previous
+    _G.arg, _G.print = previous, realPrint
     if not ok then
       t.ok(false, "the installer raised: " .. tostring(code))
-      return nil
+      return nil, table.concat(printed, "\n")
     end
-    return code
+    return code, table.concat(printed, "\n")
   end
 
   t.eq(#paths, 24, "the installer lists the entry point, the library, and the bundle")
@@ -248,13 +260,15 @@ return function(t, mock)
   end
 
   do
-    local code = installer({ "--bundle" }, found({ paths[#paths] }), "https://git.example/owner/name", "main")
+    local code, said = installer({ "--bundle" }, found({ paths[#paths] }), "https://git.example/owner/name", "main")
     t.eq(code, 0, "--bundle probes with the bundle, not with the tree")
     t.eq(requested(1), "https://git.example/owner/name/raw/branch/main/dist/opencode.lua",
       "so a host that serves the tree but not the bundle is still found")
     t.eq(requested(2), "https://git.example/owner/name/raw/branch/main/dist/opencode.lua",
       "and the winning candidate is then used for the real download")
     t.eq(#mock.requests, 2, "which costs one extra request")
+    t.contains(said, "run it with:  ./opencode.lua", "the bundle is named for what it was written as")
+    t.ok(not said:find("./init.lua", 1, true), "and not for a file this mode did not install")
   end
 
   do
@@ -266,7 +280,7 @@ return function(t, mock)
   -- The modular tree.
 
   do
-    local code = installer({ "https://raw.example/main/" }, queue(nil, t.root, paths))
+    local code, said = installer({ "https://raw.example/main/" }, queue(nil, t.root, paths))
     t.eq(code, 0, "installing from a url succeeds")
     t.eq(#mock.requests, 23, "one request per library file, and not for the bundle")
     t.eq(requested(1), "https://raw.example/main/init.lua", "the first file is the entry point")
@@ -280,6 +294,20 @@ return function(t, mock)
       "the file that landed is the one from the repository"
     )
     t.ok(not env.exists(mock.root .. "/opencode.lua"), "bundle mode is not implied")
+
+    -- The closing advice. It used to say `opencode init.lua`, which is wrong twice
+    -- over on a computer: the modular path installs no program of that name, and
+    -- the argument would be read as a question to send the model.
+    --
+    -- A shell finds a program by name on the program path, which on a computer is
+    -- `/rom/programs` -- read-only, so nothing can be installed there and a bare
+    -- name never resolves to a file put somewhere else. A name containing a `/` is
+    -- resolved against the current directory instead, which is where these were just
+    -- written. So the `./` is the entire fix, and `shell.run` needs it for the same
+    -- reason: it goes through the same lookup.
+    t.contains(said, "run it with:  ./init.lua", "the tree is run from where it was written")
+    t.contains(said, 'shell.run("./init.lua")', "and from the Lua prompt, with the same ./")
+    t.ok(not said:find("opencode init.lua", 1, true), "and not as a command no computer has")
   end
 
   -- The same run, with a url that has no trailing slash.
