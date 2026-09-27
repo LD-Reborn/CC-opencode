@@ -20,7 +20,7 @@ local BRANCH = "main"
 local FILES = {
   { "init.lua", 16184, "init.lua" },
   { "src/agent.lua", 13912, "src/agent.lua" },
-  { "src/config.lua", 5259, "src/config.lua" },
+  { "src/config.lua", 5984, "src/config.lua" },
   { "src/environment.lua", 9403, "src/environment.lua" },
   { "src/http.lua", 6905, "src/http.lua" },
   { "src/json.lua", 9449, "src/json.lua" },
@@ -43,7 +43,7 @@ local FILES = {
   { "src/util.lua", 3674, "src/util.lua" }
 }
 
-local BUNDLE = { "dist/opencode.lua", 164248, "opencode.lua" }
+local BUNDLE = { "dist/opencode.lua", 164973, "opencode.lua" }
 
 -- Where the files land. Decided once, here, rather than relying on the shell's
 -- directory still being the same when the last file arrives.

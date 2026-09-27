@@ -13,8 +13,21 @@ return function(t, mock)
   --- Load init.lua fresh. It is a program rather than a library, so it is read
   --- from disk instead of required: a require would hand back a cached copy and
   --- `M.state` would leak from one test into the next.
+  --- Write an `opencode.json`, keeping the zen key the tests need.
+  --
+  --- The default provider is the zen gateway and it needs a key, so a test that
+  --- writes a config of its own would otherwise resolve no model and make no
+  --- request. Merging keeps each test to the one field it is actually about.
+  local function writeConfig(config)
+    config = config or {}
+    config.env = config.env or {}
+    config.env.OPENCODE_API_KEY = config.env.OPENCODE_API_KEY or "zen-key"
+    env.write(mock.root .. "/opencode.json", json.encode(config))
+  end
+
   local function loadInit()
     mock.setup()
+    writeConfig()
     local path = t.root .. "/init.lua"
     local chunk, err = loadfile(path)
     if not chunk then
@@ -55,14 +68,18 @@ return function(t, mock)
 
   do
     local init = assert(loadInit())
+    -- A key, because the default provider is the zen gateway and it needs one.
+    -- Without one nothing resolves at all, which the missing-key case below
+    -- covers for a provider named explicitly.
+
     local state = init.setup({}, mock.screen({}))
 
     t.eq(state.agent, "build", "the default agent is build")
     t.eq(state.config.model, "opencode/gpt-5", "the default model comes from the built-in defaults")
     t.eq(state.model.id, "gpt-5", "the default model resolves")
     t.eq(state.model.providerID, "opencode", "the default provider is opencode")
-    t.eq(state.model.apiKey, "public", "the opencode profile carries a public key")
-    t.eq(state.smallModel.id, "gpt-5-mini", "the small model resolves too")
+    t.eq(state.model.apiKey, "zen-key", "and takes the key from the env")
+    t.eq(state.smallModel.id, "gpt-5-nano", "the small model resolves too")
     t.eq(state.error, nil, "a working config reports no error")
     t.eq(state.autoSave, false, "sessions are not saved unless asked")
     t.eq(state.stream, false, "requests are not streamed unless asked")
@@ -113,7 +130,7 @@ return function(t, mock)
   do
     -- A key in the config makes the same model that just failed to resolve.
     local init = assert(loadInit())
-    env.write(mock.root .. "/opencode.json", json.encode({ env = { GROQ_API_KEY = "gsk-test" } }))
+    writeConfig({ env = { GROQ_API_KEY = "gsk-test" } })
     local state = init.setup({ "--model", "groq/llama-3.3-70b" }, mock.screen({}))
     t.eq(state.model and state.model.apiKey, "gsk-test", "a key in opencode.json is used")
   end
@@ -129,7 +146,7 @@ return function(t, mock)
     t.eq(code, 0, "a successful one-shot run exits zero")
     t.contains(screen.text, "There are 3 programs.", "the answer is printed")
     t.eq(#mock.requests, 1, "one request was made")
-    t.eq(mock.requests[1].url, "https://models.opencode.ai/api/v1/chat/completions", "the default provider's url is used")
+    t.eq(mock.requests[1].url, "https://opencode.ai/zen/v1/chat/completions", "the default provider's url is used")
     local body = json.decode(mock.requests[1].body)
     t.eq(body.messages[#body.messages].content, "how many programs", "the arguments are joined into the question")
   end
@@ -176,7 +193,7 @@ return function(t, mock)
   do
     local init = assert(loadInit())
     local screen = mock.screen({})
-    env.write(mock.root .. "/opencode.json", json.encode({ title = false }))
+    writeConfig({ title = false })
     mock.respond(textTurn("answered"))
     init.main({ "--save", "how many programs" }, screen)
     t.eq(#mock.requests, 1, "title = false skips the naming request")
@@ -286,11 +303,11 @@ return function(t, mock)
 
   do
     local init = assert(loadInit())
-    local screen = mock.screen({ "/model", "/model opencode/gpt-5-mini", "/model", "/exit" })
+    local screen = mock.screen({ "/model", "/model opencode/gpt-5-nano", "/model", "/exit" })
     init.main({}, screen)
-    t.contains(screen.text, "opencode/gpt-5-mini", "/model <id> switches the model")
-    t.eq(init.state.config.model, "opencode/gpt-5-mini", "the switch is kept in the state")
-    t.eq(init.state.model.id, "gpt-5-mini", "the resolved model follows")
+    t.contains(screen.text, "opencode/gpt-5-nano", "/model <id> switches the model")
+    t.eq(init.state.config.model, "opencode/gpt-5-nano", "the switch is kept in the state")
+    t.eq(init.state.model.id, "gpt-5-nano", "the resolved model follows")
   end
 
   do
@@ -311,10 +328,10 @@ return function(t, mock)
 
   do
     local init = assert(loadInit())
-    env.write(mock.root .. "/opencode.json", json.encode({
+    writeConfig({
       env = { GROQ_API_KEY = "gsk-test" },
       provider = { groq = { models = { ["llama-3.3-70b"] = { name = "Llama 3.3 70B" } } } },
-    }))
+    })
     local screen = mock.screen({ "/models", "/providers", "/exit" })
     init.main({}, screen)
     t.contains(screen.text, "groq/llama-3.3-70b", "/models lists configured models")

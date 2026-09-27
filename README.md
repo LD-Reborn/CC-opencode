@@ -135,9 +135,22 @@ folder, on CC:Tweaked 1.87.0 and later:
 ```
 
 Rules match the host in the url, not the repository, so this is
-`raw.githubusercontent.com` for the downloads above — not `github.com`. Add an
-entry for your model provider's host as well, or every call to the model fails
-the same way.
+`raw.githubusercontent.com` for the downloads above — not `github.com`. And the
+model's host is a separate entry, because a computer that can install and then
+cannot talk to anything is a confusing half-working state:
+
+```toml
+[[http.rules]]
+    host = "opencode.ai"
+    action = "allow"
+    max_upload = 4194304
+    max_download = 16777216
+    timeout = 30000
+```
+
+Whichever provider you configure needs its own entry the same way. A missing one
+is reported with the file to edit rather than retried, since a missing config
+line is not something a second attempt would fix.
 
 Two traps in that file. Rules are matched in order, and the default config also
 carries a deny for `$private`, so a host that resolves to a LAN address is
@@ -155,10 +168,14 @@ Configuration is a single `opencode.json`, read from the working directory first
 and then from `/`. It is JSON, not Lua, so it is safe to keep next to a world
 save or a paste.
 
-The minimum, if you are happy with a public model:
+The minimum, if you are happy with the default model. The key is not optional —
+the zen gateway is an ordinary provider that happens to be the default:
 
 ```json
-{ "model": "opencode/gpt-5" }
+{
+  "model": "opencode/gpt-5",
+  "env": { "OPENCODE_API_KEY": "..." }
+}
 ```
 
 A more typical file:
@@ -168,7 +185,7 @@ A more typical file:
   "$schema": "https://opencode.ai/config.json",
 
   "model": "openrouter/anthropic/claude-sonnet-4",
-  "small_model": "opencode/gpt-5-mini",
+  "small_model": "opencode/gpt-5-nano",
 
   "env": {
     "OPENROUTER_API_KEY": "sk-or-v1-..."
@@ -211,7 +228,7 @@ Every key is optional.
 | Key | Meaning | Default |
 | --- | --- | --- |
 | `model` | `provider/model` to use | `opencode/gpt-5` |
-| `small_model` | Model for session titles and compaction summaries | `opencode/gpt-5-mini` |
+| `small_model` | Model for session titles and compaction summaries | `opencode/gpt-5-nano` |
 | `env` | API keys, keyed by the provider's variable name | none |
 | `provider` | Per-provider base url, headers, model list, per-model limits | see below |
 | `agent` | Step budget and prompt override, per agent | 25 / 15 / 25 steps |
@@ -230,10 +247,18 @@ A model id is `provider/model`, split on the **first** slash only, so
 These providers are built in, with their base urls and the environment variable
 each one reads:
 
-`opencode` (`OPENCODE_API_KEY`, ships with a public key), `openai`
-(`OPENAI_API_KEY`), `openrouter`, `groq`, `cerebras`, `deepinfra`, `deepseek`,
-`fireworks`, `togetherai`, `xai`, `ollama`, and `lmstudio` — the last two with a
-placeholder key, since a local server ignores the header.
+`opencode` (`OPENCODE_API_KEY`), `openai` (`OPENAI_API_KEY`), `openrouter`,
+`groq`, `cerebras`, `deepinfra`, `deepseek`, `fireworks`, `togetherai`, `xai`,
+`ollama`, and `lmstudio` — the last two with a placeholder key, since a local
+server ignores the header. Every other one needs a real key; a provider with
+none is refused at startup, naming the variable to set, rather than failing later
+at the gateway.
+
+The zen gateway is on `opencode.ai`, and the key is issued there. It is worth
+being precise about that, because `models.opencode.ai` looks like the same
+service and is not: it is the models.dev website, and it answers every path under
+it with a redirect to its front page, so a base url pointing there connects and
+then hands back HTML where a JSON reply should be.
 
 Any other OpenAI-compatible endpoint is a config entry away, and nothing else is
 needed:

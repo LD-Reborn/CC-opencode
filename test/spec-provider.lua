@@ -91,8 +91,20 @@ return function(t, mock)
   t.eq(fromEnv.apiKeyResolved, "from-env", "a key is read from the env table by its documented name")
 
   t.eq(provider.get({ cwd = mock.root }, "ollama").apiKeyResolved, "ollama", "a provider with a built-in key needs no env")
-  t.eq(provider.get({ cwd = mock.root }, "opencode").apiKeyResolved, "public", "the opencode profile ships a public key")
   t.eq(provider.get({ cwd = mock.root }, "lmstudio").apiKeyResolved, "lmstudio", "the lmstudio profile ships a local key")
+  -- The zen gateway is not one of the two that work without a key. It used to be
+  -- given `apiKey = "public"`, which reads as though no key is needed and is
+  -- answered with a 401, so it is worth pinning that it is refused up front
+  -- instead, with a message naming the ways to supply one.
+  local noKey, noKeyReason = provider.get({ cwd = mock.root }, "opencode")
+  t.eq(noKey, nil, "the opencode profile has no built-in key")
+  t.contains(noKeyReason, "No API key", "and says so rather than failing later at the gateway")
+  t.contains(noKeyReason, "env", "naming the ways to supply one")
+  t.eq(
+    provider.get({ cwd = mock.root, env = { OPENCODE_API_KEY = "zen-key" } }, "opencode").apiKeyResolved,
+    "zen-key",
+    "and resolves once OPENCODE_API_KEY is set"
+  )
 
   local keyPath = mock.root .. "/token.txt"
   mock.writtenFiles()

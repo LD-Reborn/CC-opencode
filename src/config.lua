@@ -9,8 +9,12 @@ local env = require("environment")
 
 local M = {}
 
+-- Both of these are ids the gateway actually serves, which is worth stating
+-- because the obvious guess for a small model is not one of them: titles and
+-- compaction summaries go to the small model on every saved session, and a
+-- retired id fails the whole turn rather than degrading to a worse title.
 M.DEFAULT_MODEL = "opencode/gpt-5"
-M.DEFAULT_SMALL_MODEL = "opencode/gpt-5-mini"
+M.DEFAULT_SMALL_MODEL = "opencode/gpt-5-nano"
 
 M.DEFAULTS = {
   model = M.DEFAULT_MODEL,
@@ -39,7 +43,13 @@ M.DEFAULTS = {
 -- `env` lists the variable names the credential is read from in `config.env`,
 -- which stands in for a real process environment.
 M.PROFILES = {
-  opencode = { name = "opencode zen", base = "https://models.opencode.ai/api/v1", env = { "OPENCODE_API_KEY" }, apiKey = "public" },
+  -- The gateway is on opencode.ai, not on models.opencode.ai. That looks like a
+  -- near-miss and is not one: models.opencode.ai is the models.dev website, and
+  -- it answers every path under it with a 302 to its front page, so a base url
+  -- pointing there connects and then hands back HTML where a JSON reply should
+  -- be. It needs a key like any other provider; the key is issued on opencode.ai
+  -- and goes in `env.OPENCODE_API_KEY`.
+  opencode = { name = "opencode zen", base = "https://opencode.ai/zen/v1", env = { "OPENCODE_API_KEY" } },
   openai = { name = "OpenAI", base = "https://api.openai.com/v1", env = { "OPENAI_API_KEY" } },
   openrouter = { name = "OpenRouter", base = "https://openrouter.ai/api/v1", env = { "OPENROUTER_API_KEY" } },
   groq = { name = "Groq", base = "https://api.groq.com/openai/v1", env = { "GROQ_API_KEY" } },

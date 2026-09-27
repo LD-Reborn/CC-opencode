@@ -363,6 +363,16 @@ local function run(args, inputs, responses, prepare)
   mock.setup()
   -- mock.setup() empties the mock filesystem, so a fixture is written after it,
   -- not before.
+  --
+  -- The default provider is the zen gateway and it needs a key, so without one
+  -- nothing resolves and no request is ever made. Seeded here rather than in
+  -- each case, and a `prepare` that wants a different config writes its own file
+  -- over this one.
+  -- Written as a literal rather than encoded: by this point the bundle has
+  -- replaced package.preload, so a require here would not find the json module.
+  local config = assert(io.open(mock.root .. "/opencode.json", "wb"))
+  config:write('{"env":{"OPENCODE_API_KEY":"zen-key"}}')
+  config:close()
   if prepare then
     prepare()
   end
@@ -388,7 +398,7 @@ check("a one-shot turn exits zero", code == 0, "got " .. tostring(code))
 check("the answer is printed", screen.text:find("It is Tuesday.", 1, true) ~= nil)
 check("one request was made", #mock.requests == 1, "got " .. #mock.requests)
 check("the request went to the default provider",
-  mock.requests[1] and mock.requests[1].url == "https://models.opencode.ai/api/v1/chat/completions",
+  mock.requests[1] and mock.requests[1].url == "https://opencode.ai/zen/v1/chat/completions",
   mock.requests[1] and mock.requests[1].url or "none")
 
 -- A file for the read tool below to find. The mock's filesystem is the host's, so
