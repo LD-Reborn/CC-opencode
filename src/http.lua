@@ -110,12 +110,31 @@ function M.request(url, options)
   local lastError = "no attempt was made"
 
   for attempt = 1, attempts do
-    local ok, handle = pcall(http.request, url, {
+    -- The request is one table, not a url followed by an options table.
+    --
+    -- CC dispatches on the first argument's type. Given a string it takes the
+    -- legacy positional form, where argument 2 is the POST body and argument 3
+    -- is the headers, so a table in second place is rejected outright with
+    -- "bad argument #2 (string expected, got table)". The url therefore belongs
+    -- *inside* the table, which is the documented form and the only one that
+    -- carries a method, a timeout and a body together.
+    --
+    -- The keys are spelled out rather than merged from `options` because a nil
+    -- value is not the same as an absent key here: passing `headers = nil`
+    -- through a table constructor omits it, but a caller that built the options
+    -- table itself cannot be relied on to have done the same.
+    local request = {
+      url = url,
       method = options.method or "GET",
-      headers = options.headers,
-      body = options.body,
       timeout = options.timeout or M.DEFAULT_TIMEOUT,
-    })
+    }
+    if options.headers then
+      request.headers = options.headers
+    end
+    if options.body then
+      request.body = options.body
+    end
+    local ok, handle = pcall(http.request, request)
 
     if ok and handle then
       local status = handle.getResponseCode and handle.getResponseCode() or 200

@@ -243,8 +243,33 @@ function M.install()
   }
 
   _G.http = {
-    request = function(url, options)
-      options = options or {}
+    -- ComputerCraft dispatches on the type of the *first* argument:
+    --
+    --   http.request { url = ..., method = ..., timeout = ... }   the table form
+    --   http.request(url, body, headers)                         the legacy form
+    --
+    -- A table in second place is therefore the legacy form's `body`, which must
+    -- be a string, and it is rejected with "bad argument #2 (string expected,
+    -- got table)". This mock used to accept any arrangement, which let a program
+    -- that cannot make a single request on a real computer pass every test; the
+    -- check below is what makes that impossible.
+    request = function(a, b, c)
+      local url, options
+      if type(a) == "table" then
+        options = a
+        url = a.url
+        if type(url) ~= "string" then
+          error("bad argument #1 to 'request' (string expected, got " .. type(url) .. ")", 0)
+        end
+      elseif type(a) == "string" then
+        url = a
+        if b ~= nil and type(b) ~= "string" then
+          error("bad argument #2 to 'request' (string expected, got " .. type(b) .. ")", 0)
+        end
+        options = { method = b and "POST" or "GET", body = b, headers = c }
+      else
+        error("bad argument #1 to 'request' (string expected, got " .. type(a) .. ")", 0)
+      end
       M.requests[#M.requests + 1] = {
         url = url,
         method = options.method,

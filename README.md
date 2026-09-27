@@ -422,6 +422,12 @@ This is a port, and the port is not cosmetic. The things that differ:
 - **Memory is small.** A context window of 128 KB is already a large session by
   ComputerCraft standards. `compaction.reserved` exists to leave room for the
   reply.
+- **`http.request` dispatches on its first argument's type.** A table means the
+  options form, with the url *inside* it. A string means the legacy positional
+  signature, where argument 2 is the POST body — so `http.request(url, { method =
+  "GET" })` is refused with `bad argument #2 (string expected, got table)` and
+  the request never leaves the computer. It reads as correct, and it fails only on
+  real hardware. The mock raises on that shape, so the test suite catches it.
 - **No regex, no `loadstring`, no `io`.** Hence `pattern.lua` and the bundled
   loader, which wraps each module as a function body and installs it through
   `package.preload`.

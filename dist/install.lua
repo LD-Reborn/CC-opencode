@@ -22,7 +22,7 @@ local FILES = {
   { "src/agent.lua", 13912, "src/agent.lua" },
   { "src/config.lua", 5984, "src/config.lua" },
   { "src/environment.lua", 9403, "src/environment.lua" },
-  { "src/http.lua", 6905, "src/http.lua" },
+  { "src/http.lua", 7865, "src/http.lua" },
   { "src/json.lua", 9449, "src/json.lua" },
   { "src/llm.lua", 8315, "src/llm.lua" },
   { "src/pattern.lua", 13485, "src/pattern.lua" },
@@ -43,7 +43,7 @@ local FILES = {
   { "src/util.lua", 5452, "src/util.lua" }
 }
 
-local BUNDLE = { "dist/opencode.lua", 167288, "opencode.lua" }
+local BUNDLE = { "dist/opencode.lua", 168248, "opencode.lua" }
 
 -- Where the files land. Decided once, here, rather than relying on the shell's
 -- directory still being the same when the last file arrives.
@@ -139,7 +139,11 @@ end
 -- anything reachable from here, and left alone it arrives as a Lua stack trace
 -- through the middle of a download loop.
 local function fetch(url)
-  local ok, handle = pcall(http.request, url, { method = "GET", timeout = 60 })
+  -- One table, not a url followed by an options table: CC dispatches on the type
+  -- of the first argument, so a table in second place is read as the legacy
+  -- positional form's POST body and rejected with "bad argument #2 (string
+  -- expected, got table)". The url belongs inside the table.
+  local ok, handle = pcall(http.request, { url = url, method = "GET", timeout = 60 })
   if not ok then
     local reason = tostring(handle)
     local lower = reason:lower()

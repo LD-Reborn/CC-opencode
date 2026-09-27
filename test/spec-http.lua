@@ -37,6 +37,10 @@ return function(t, mock)
   t.eq(sent.method, "POST", "the method is passed to CC")
   t.eq(sent.body, "{}", "the body is passed to CC")
   t.eq(sent.headers["content-type"], "application/json", "request headers are passed to CC")
+
+  -- The request is one table, and that is not a style choice. Covered at the end
+  -- of this spec, where it can make its own requests without disturbing the
+  -- relative counts the assertions above rely on.
   t.eq(sent.timeout, 12, "the timeout is passed to CC")
 
   -- A non-2xx response is returned, not raised, so callers can read the body.
@@ -200,4 +204,31 @@ return function(t, mock)
   mock.respond({ status = 200, body = '{"raw":true}' })
   http.postJson("https://api.x.com/v1/chat/completions", nil, { raw = '{"already":"encoded"}' })
   t.eq(lastRequest().body, '{"already":"encoded"}', "a raw body bypasses the encoder")
+
+  -- The argument shape, which is not a style choice.
+  --
+  -- CC picks its form from the type of the *first* argument. Given a string it
+  -- takes the legacy positional signature, where argument 2 is the POST body; a
+  -- table there is refused with "bad argument #2 (string expected, got table)"
+  -- and the request never leaves the computer. So `http.request(url, { method =
+  -- ... })` fails on real hardware while passing any mock that does not check its
+  -- arguments, which is exactly what this one used to be — so a program that
+  -- could not make a single request had a green suite.
+  --
+  -- These call CC's entry point rather than the library's: the library pcalls and
+  -- retries, so going through it would report the refusal three times over and
+  -- quietly eat the queued responses the rest of this spec depends on.
+
+  mock.setup()
+  local refused, refusal = pcall(_G.http.request, "https://api.x.com/v1/chat/completions", { method = "GET" })
+  t.ok(not refused, "a url followed by an options table is refused, as CC refuses it")
+  t.contains(tostring(refusal), "bad argument #2", "with the same complaint CC makes")
+  t.contains(tostring(refusal), "string expected, got table", "and the same wording")
+  t.eq(countRequests(), 0, "and the request is not recorded, having never been made")
+
+  local handle = _G.http.request({ url = "https://api.x.com/v1/chat/completions", method = "GET", timeout = 5 })
+  t.ok(handle, "a url inside the options table is what CC wants")
+  handle.close()
+  t.eq(lastRequest().url, "https://api.x.com/v1/chat/completions", "and the url is read out of it")
+  t.eq(lastRequest().timeout, 5, "with the timeout alongside")
 end

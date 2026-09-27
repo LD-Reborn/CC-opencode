@@ -142,6 +142,28 @@ return function(t, mock)
     t.eq(offender, nil, "no long literal goes straight to print: " .. tostring(offender))
   end
 
+  -- The installer asks for http the documented way.
+  --
+  -- `http.request(url, { method = "GET" })` looks reasonable and cannot work: CC
+  -- dispatches on the type of the first argument, so a table in second place is
+  -- the legacy signature's POST body and is refused with "bad argument #2
+  -- (string expected, got table)". The installer then fails on its very first
+  -- file, before writing anything, with an error that names neither the url nor
+  -- the request. The mock now raises on that shape, so this is checked by
+  -- behaviour as well as by reading the source.
+
+  do
+    local source = env.read(installerPath)
+    t.contains(source, "http.request, { url = url", "the url goes inside the request table")
+    t.notContains(source, "http.request, url, {", "and never as a second argument")
+  end
+
+  do
+    local code = installer({ "https://raw.example/main/" }, queue({}, t.root, paths))
+    t.eq(code, 0, "and a real install still works through the mock, which enforces the shape")
+    t.eq(mock.requests[1].url, "https://raw.example/main/init.lua", "reaching the first file")
+  end
+
   -- The repository and branch baked in by `install.lua`.
 
   do
