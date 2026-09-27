@@ -78,17 +78,23 @@ return function(t)
   -- sleep falls back to a timer when os.sleep is absent (ComputerCraft).
 
   local savedSleep = os.sleep
+  local savedPull = os.pullEvent
   local pulled = 0
   os.sleep = nil
   _G.os.startTimer = function(seconds)
     return { seconds = seconds }
   end
+  -- Replaced rather than deleted, because the mock's own `pullEvent` answers a timer
+  -- on an empty queue and this stub answers one unconditionally: a test that leaked
+  -- it would leave every later suite's key loop spinning on timers forever, and the
+  -- suite it broke would not be the one that leaked.
   _G.os.pullEvent = function()
     pulled = pulled + 1
     return "timer", pulled
   end
   local ok = pcall(util.sleep, 0.01)
   os.sleep = savedSleep
+  os.pullEvent = savedPull
   t.ok(ok, "sleep works through the timer fallback")
   t.eq(pulled, 1, "the timer fallback pulls exactly one event")
 

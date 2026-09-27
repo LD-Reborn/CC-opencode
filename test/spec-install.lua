@@ -13,10 +13,28 @@ return function(t, mock)
   local installerPath = t.root .. "/dist/install.lua"
 
   --- The installer's own file list, as the paths it will fetch.
+  --
+  -- CC-GUI's `GUI.lua` is not among them: it comes from its own repository, so it is
+  -- fetched by a separate step rather than being an entry in this list.
   local paths = {}
   for path in (env.read(installerPath) or ""):gmatch('{ "([^"]+)", %d+,') do
     paths[#paths + 1] = path
   end
+
+  --- The modular tree alone, which is every entry but the last.
+  --
+  -- The bundle is the last entry and is fetched only in `--bundle` mode, so a queue
+  -- built for the tree has to leave it out: a response queued for a file the installer
+  -- never asks for is a response the next request reads instead, and the misalignment
+  -- shows up several files later as a size that is wrong for the file it names.
+  local tree = {}
+  for index = 1, #paths - 1 do
+    tree[index] = paths[index]
+  end
+
+  --- CC-GUI's root, which is where `GUI.lua` is read from when a test wants to queue
+  -- a response carrying the real file.
+  local guiRoot = t.root .. "/../CC-GUI"
 
   --- A queue of `probe` answers, then a 200 carrying the real file for each of
   -- `wanted`.
@@ -44,12 +62,50 @@ return function(t, mock)
     return queue({ { status = 200, body = env.read(t.root .. "/" .. wanted[1]) or "" } }, t.root, wanted)
   end
 
+  --- A queue with CC-GUI's answers in it, for the fetch that comes after the tree.
+  --
+  -- Two of them, because the fetch is a search and then a download: the installer
+  -- probes the first shape a host might use, and if that answers with the right
+  -- bytes it downloads from there. A single answer would be spent on the probe and
+  -- the download would read whatever came next in the queue.
+  --
+  -- The bodies are the real file for the same reason the tree's are: the installer
+  -- compares sizes, and a fabricated body of the right size would let a test pass
+  -- without proving the right file arrived.
+  local function withGui(responses)
+    local body = env.read(guiRoot .. "/GUI.lua") or ""
+    local out = {}
+    for _, response in ipairs(responses or {}) do
+      out[#out + 1] = response
+    end
+    out[#out + 1] = { status = 200, body = body }
+    out[#out + 1] = { status = 200, body = body }
+    return out
+  end
+
+  --- A queue where every CC-GUI answer is the wrong length, so the search fails.
+  --
+  -- One per shape a host might use, and then one more: the search has to exhaust all
+  -- of them before it concludes that none serves the file, and a short queue would
+  -- end in the mock's default answer rather than in the failure being arranged.
+  local function withoutGui(responses)
+    local out = {}
+    for _, response in ipairs(responses or {}) do
+      out[#out + 1] = response
+    end
+    for _ = 1, 6 do
+      out[#out + 1] = { status = 200, body = "<html>sign in</html>" }
+    end
+    return out
+  end
+
   --- Run the generated installer with the arguments a shell would pass.
   --
   -- `repo` and `branch` replace the ones baked in by `install.lua`, so the
-  -- candidate urls can be tried for hosts this checkout is not on. The queue has
-  -- to be built after `mock.setup()`, which wipes the mock filesystem, so both
-  -- the responses and the rewritten file come in as arguments.
+  -- candidate urls can be tried for hosts this checkout is not on. `guiRepo` and
+  -- `guiBranch` do the same for CC-GUI, which is fetched from its own repository.
+  -- The queue has to be built after `mock.setup()`, which wipes the mock filesystem,
+  -- so both the responses and the rewritten file come in as arguments.
   --
   -- The installer returns a status instead of calling `os.exit`, which
   -- ComputerCraft does not have, so the return value is the status.
@@ -64,16 +120,27 @@ return function(t, mock)
     return entry and entry.url or ("(request " .. n .. " was never made)")
   end
 
-  local function installer(args, responses, repo, branch, failure)
+  local function installer(args, responses, repo, branch, failure, guiRepo, guiBranch)
     mock.setup()
     local path = installerPath
-    if repo then
-      local source = env.read(installerPath):gsub('local REPO = "[^"]*"', "local REPO = " .. string.format("%q", repo), 1)
-      source = source:gsub(
-        'local BRANCH = "[^"]*"',
-        "local BRANCH = " .. string.format("%q", branch or "main"),
-        1
-      )
+    if repo or guiRepo then
+      local source = env.read(installerPath)
+      if repo then
+        source = source:gsub('local REPO = "[^"]*"', "local REPO = " .. string.format("%q", repo), 1)
+        source = source:gsub(
+          'local BRANCH = "[^"]*"',
+          "local BRANCH = " .. string.format("%q", branch or "main"),
+          1
+        )
+      end
+      if guiRepo then
+        source = source:gsub('local GUI_REPO = "[^"]*"', "local GUI_REPO = " .. string.format("%q", guiRepo), 1)
+        source = source:gsub(
+          'local GUI_BRANCH = "[^"]*"',
+          "local GUI_BRANCH = " .. string.format("%q", guiBranch or "main"),
+          1
+        )
+      end
       path = mock.root .. "/variant.lua"
       local out = fs.open(path, "w")
       if not out then
@@ -121,7 +188,7 @@ return function(t, mock)
     return code, table.concat(printed, "\n")
   end
 
-  t.eq(#paths, 24, "the installer lists the entry point, the library, and the bundle")
+  t.eq(#paths, 25, "the installer lists the entry point, the library, and the bundle")
   t.eq(paths[1], "init.lua", "starting with the entry point")
   t.eq(paths[#paths], "dist/opencode.lua", "and ending with the bundle")
 
@@ -230,7 +297,7 @@ return function(t, mock)
     t.eq(requested(3), repo .. "/raw/main/init.lua", "and so is a page that admits it is one")
     t.eq(requested(4), repo .. "/branch/main/init.lua", "the last candidate is tried too")
     t.eq(requested(5), repo .. "/branch/main/init.lua", "and the install carries on from the one that worked")
-    t.eq(requested(27), repo .. "/branch/main/src/util.lua", "through the whole tree")
+    t.eq(requested(28), repo .. "/branch/main/src/util.lua", "through the whole tree")
     t.ok(env.exists(mock.root .. "/init.lua"), "writing the files it found")
   end
 
@@ -266,14 +333,22 @@ return function(t, mock)
       "so a host that serves the tree but not the bundle is still found")
     t.eq(requested(2), "https://git.example/owner/name/raw/branch/main/dist/opencode.lua",
       "and the winning candidate is then used for the real download")
-    t.eq(#mock.requests, 2, "which costs one extra request")
+    -- Two for the bundle -- the probe and the real download -- and then five for the
+    -- CC-GUI search, which has to try every shape a host might use.
+    t.eq(#mock.requests, 7, "which costs one extra request, and the CC-GUI search its own")
     t.contains(said, "run it with:  ./opencode.lua", "the bundle is named for what it was written as")
     t.ok(not said:find("./init.lua", 1, true), "and not for a file this mode did not install")
   end
 
   do
-    local code = installer({}, nil, "", "")
+    -- `repo` is the empty string here rather than nil, and an empty string is truthy
+    -- in Lua, so this takes the rewrite path and bakes an empty repository in. That is
+    -- worth a test of its own: the installer has to say it has nowhere to look rather
+    -- than crash inside the message about it.
+    local code, said = installer({}, nil, "", "")
     t.eq(code, 2, "an installer with neither a url nor a repository says so")
+    -- Wrapped at the terminal's own width, like everything else it prints.
+    t.contains(said, "Could not work out where to download", "and says why")
     t.eq(#mock.requests, 0, "without contacting anybody")
   end
 
@@ -282,9 +357,13 @@ return function(t, mock)
   do
     local code, said = installer({ "https://raw.example/main/" }, queue(nil, t.root, paths))
     t.eq(code, 0, "installing from a url succeeds")
-    t.eq(#mock.requests, 23, "one request per library file, and not for the bundle")
+    -- One per library file, plus the CC-GUI lookup after them: the interface is
+    -- optional, so that one is a search and not a download.
+    t.eq(#mock.requests, 29, "one request per library file, then the CC-GUI search")
     t.eq(requested(1), "https://raw.example/main/init.lua", "the first file is the entry point")
-    t.eq(requested(23), "https://raw.example/main/src/util.lua", "the last is the last library file")
+    -- Twenty-four files in the tree: the entry point and the twenty-three modules under
+    -- src/. The bundle is not among them, being a separate entry with its own name.
+    t.eq(requested(24), "https://raw.example/main/src/util.lua", "the last is the last library file")
     t.ok(env.exists(mock.root .. "/init.lua"), "init.lua was written")
     t.ok(env.exists(mock.root .. "/src/agent.lua"), "a nested module went into a directory that did not exist")
     t.ok(env.exists(mock.root .. "/src/tool/registry.lua"), "and so did the second level")
@@ -326,7 +405,9 @@ return function(t, mock)
       queue(nil, t.root, { paths[#paths] })
     )
     t.eq(code, 0, "--bundle installs one file")
-    t.eq(#mock.requests, 1, "and asks for it once")
+    -- The bundle, then the CC-GUI search: five shapes a host might use, none of which
+    -- serves a file to an empty queue.
+    t.eq(#mock.requests, 6, "and asks for it once, then searches for CC-GUI")
     t.eq(requested(1), "https://raw.example/main/dist/opencode.lua", "at its path in the repository")
     t.ok(env.exists(mock.root .. "/opencode.lua"), "written under the name the program is run by")
     t.eq(
@@ -399,5 +480,63 @@ return function(t, mock)
     local code = installer({ "--bundle", "src/util.lua" })
     t.eq(code, 1, "an argument that is neither a url nor a flag is refused")
     t.eq(#mock.requests, 0, "before anything is fetched")
+  end
+
+  -- CC-GUI, which the interface is built on.
+  --
+  -- It is fetched from its own repository rather than from this one, because it is not
+  -- in this one: a checkout of this project has no GUI.lua in it, and an installer
+  -- that looked for one would be looking for a file that is not there. It is also
+  -- optional in a way nothing else in this install is not -- the program asks for it
+  -- with a `pcall` and carries on without it -- so a failure here is reported and the
+  -- run goes on rather than stopping a working install over a plainer screen.
+
+  do
+    -- The tree's responses, then CC-GUI's: the installer asks for the tree first and
+    -- for CC-GUI second, so the queue has to be in that order.
+    local code, said = installer({ "https://raw.example/main/" }, withGui(queue(nil, t.root, tree)))
+    t.eq(code, 0, "an install with CC-GUI reachable succeeds")
+    t.ok(env.exists(mock.root .. "/GUI.lua"), "and writes GUI.lua beside the program")
+    t.eq(
+      env.read(mock.root .. "/GUI.lua"),
+      env.read(guiRoot .. "/GUI.lua"),
+      "and it is the file from the CC-GUI repository, byte for byte"
+    )
+    t.contains(said, "  ok    GUI.lua", "and reports it like any other file")
+    t.contains(said, "installed 25 file(s)", "counting it among them")
+  end
+
+  do
+    -- A body of the wrong length is a failure, not a file, and the size check is what
+    -- says so: a web page answers 200 as readily as a file does.
+    local code, said = installer({ "https://raw.example/main/" }, withoutGui(queue(nil, t.root, tree)))
+    t.eq(code, 0, "a CC-GUI that cannot be fetched does not fail the install")
+    t.ok(not env.exists(mock.root .. "/GUI.lua"), "and writes no GUI.lua")
+    t.contains(said, "the interface is unavailable without it", "but says what the cost is")
+    t.contains(said, "the plain", "and what the program does instead")
+    t.ok(env.exists(mock.root .. "/init.lua"), "the program itself is still installed")
+  end
+
+  do
+    -- The repository and branch are baked in, and a fork of CC-GUI is as worth
+    -- supporting as a fork of this: both are pointed at by a flag.
+    local code = installer({ "https://raw.example/main/" }, withGui(queue(nil, t.root, tree)), nil, nil, nil,
+      "https://git.example/owner/ccgui", "release")
+    t.eq(code, 0, "a fork of CC-GUI is installed from")
+    -- The tree's twenty-four requests, then the CC-GUI search: the first shape a host
+    -- might use answers with the right bytes, so the download is the request after it.
+    t.eq(
+      requested(25),
+      "https://git.example/owner/ccgui/raw/branch/release/GUI.lua",
+      "at its own repository and branch"
+    )
+  end
+
+  do
+    -- The default is the upstream project, which is where a person who has not thought
+    -- about it would expect to get it from.
+    local source = env.read(installerPath)
+    t.contains(source, "https://github.com/LD-Reborn/CC-GUI", "the upstream CC-GUI is the default")
+    t.contains(source, "GUI_BRANCH = \"main\"", "on its main branch")
   end
 end

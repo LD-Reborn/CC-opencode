@@ -505,6 +505,47 @@ function M.terminal()
   return nil
 end
 
+--- The computer's own terminal, unwrapped, or nil.
+--
+-- `M.terminal` prefers a monitor, which is right for a program that prints and
+-- exits but wrong for one the operator has to type into: CraftOS's keyboard
+-- belongs to the terminal, and `read` reads the terminal whatever the program
+-- happens to be drawing on. An input field drawn on a monitor is a field nobody
+-- can reach, so the GUI draws here.
+function M.console()
+  if M.isCC and type(term) == "table" and type(term.getSize) == "function" then
+    return term
+  end
+  return nil
+end
+
+--- The remaining CraftOS primitives, for the UI, each absent rather than broken.
+--
+-- A GUI needs to draw boxes (`paintutils`), name a key code (`keys`), and block
+-- until the operator does something (`os.pullEvent`). All of them are read off the
+-- globals once, and each is nil when this build of CraftOS does not have it, so
+-- that a caller can ask "is there a screen to draw on" instead of calling into
+-- nothing. The UI cannot do without `pullEvent`; the rest it degrades on.
+function M.system()
+  if not M.isCC then
+    return {}
+  end
+  return {
+    paint = type(paintutils) == "table" and paintutils or nil,
+    keyName = (type(keys) == "table" and type(keys.getName) == "function") and keys.getName or nil,
+    pullEvent = (type(os.pullEvent) == "function") and os.pullEvent or nil,
+    startTimer = (type(os.startTimer) == "function") and os.startTimer or nil,
+    cancelTimer = (type(os.cancelTimer) == "function") and os.cancelTimer or nil,
+    -- Seconds since the computer started. `os.timer` is wall-clock and so keeps
+    -- moving while the program is blocked on the network, which is where a reply
+    -- streams in; `os.clock` is CPU time and only counts the program's own work.
+    -- The UI throttles its repaints with the first and falls back to the second,
+    -- where a repaint of a screen this small costs less than the reading around it.
+    timer = (type(os.timer) == "function") and os.timer or nil,
+    clock = (type(os.clock) == "function") and os.clock or nil,
+  }
+end
+
 --- Read one line of input from the operator, or nil at end of input.
 --
 -- This is CraftOS's global `read`, not a method on a screen, and the difference

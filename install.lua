@@ -25,6 +25,11 @@
 -- that returns a file of the right length, so this works on a self-hosted forge
 -- without being told which one it is. `--url` skips the guessing.
 --
+-- CC-GUI is fetched the same way, from its own repository, because it is not in this
+-- one: the interface is built on it, it is a separate project with its own licence
+-- and its own release cadence, and a checkout of this project has no GUI.lua in it.
+-- `--gui-repo` and `--gui-branch` point the installer at a fork of it.
+--
 -- The committed `dist/install.lua` is generated with `--repo`, so that it points
 -- at the public repository rather than at whichever remote it was built from.
 --
@@ -159,6 +164,25 @@ local function sizeOf(path)
   return size
 end
 
+--- The size of CC-GUI's `GUI.lua`, which is not in this repository.
+--
+-- Looked for in the three places it can be, the same ones build.lua checks: beside
+-- the sources as the installer writes it, in a checkout of the project, and beside
+-- the checkout as it is developed against. The last is the usual one -- CC-GUI is a
+-- sibling directory in a workspace -- and the first is what a run of this installer
+--- leaves behind.
+local function guiSize()
+  for _, directory in ipairs({ root, root .. "/CC-GUI", root .. "/../CC-GUI" }) do
+    local handle = io.open(directory .. "/GUI.lua", "rb")
+    if handle then
+      local size = handle:seek("end")
+      handle:close()
+      return size
+    end
+  end
+  error("install: cannot find GUI.lua in this checkout, in CC-GUI, or beside it", 0)
+end
+
 --- One table constructor: fetch path, expected size, path to write.
 local function entry(from, to)
   return string.format("{ %q, %d, %q }", from, sizeOf(from), to)
@@ -176,6 +200,7 @@ end
 local function usage()
   print([[
 Usage: lua install.lua [--repo <url>] [--branch <name>] [--url <base url>] [--out <path>]
+                     [--gui-repo <url>] [--gui-branch <name>]
 
   --repo <url>       the repository the computer installs from, as a browsable
                     https url. Defaults to this checkout's git remote, so use it
@@ -185,6 +210,10 @@ Usage: lua install.lua [--repo <url>] [--branch <name>] [--url <base url>] [--ou
   --branch <name>    the branch to install from (default: the checked-out one)
   --url <base url>   a raw-file url, which skips the search for one entirely.
                     Overrides --repo and --branch.
+  --gui-repo <url>   the CC-GUI repository, which the interface is built on and
+                    which is not part of this one. Defaults to the upstream
+                    project, so use it to point at a fork.
+  --gui-branch <name>  the branch of that repository (default: main)
   --out <path>       where to write the installer (default: dist/install.lua)
 ]])
 end
@@ -193,6 +222,8 @@ local options = {
   url = false,
   repo = false,
   branch = false,
+  guiRepo = false,
+  guiBranch = false,
   out = root .. "/dist/install.lua",
 }
 local index = 1
@@ -206,6 +237,12 @@ while arg[index] do
     index = index + 2
   elseif item == "--branch" then
     options.branch = arg[index + 1] or ""
+    index = index + 2
+  elseif item == "--gui-repo" then
+    options.guiRepo = arg[index + 1] or ""
+    index = index + 2
+  elseif item == "--gui-branch" then
+    options.guiBranch = arg[index + 1] or ""
     index = index + 2
   elseif item == "--out" then
     options.out = arg[index + 1] or options.out
@@ -254,6 +291,21 @@ if options.url == false then
   end
 end
 
+-- CC-GUI, which the interface is built on, and which lives in a repository of its
+-- own. Resolved the same way and for the same reason: it is not in this repository,
+-- so there is nothing here to fetch it from, and a fork of it is as worth
+-- supporting as a fork of this.
+--
+-- The default is the upstream project, which is the one place a person who has not
+-- thought about it would expect to get it from.
+local GUI_REPO, GUI_BRANCH = "https://github.com/LD-Reborn/CC-GUI", "main"
+if options.guiRepo ~= false then
+  GUI_REPO = options.guiRepo
+end
+if options.guiBranch ~= false then
+  GUI_BRANCH = options.guiBranch
+end
+
 -- Substituted by name rather than by position: the generated program is full of
 -- its own `string.format` directives, and a single `%` in the wrong place would
 -- be read as a substitution here.
@@ -289,6 +341,17 @@ local BASE = @URL@
 -- Otherwise the installer looks for the raw files itself, under this repository.
 local REPO = @REPO@
 local BRANCH = @BRANCH@
+
+-- CC-GUI, which the interface is built on. A separate project in a separate
+-- repository, so it is fetched from there and not from this one: a checkout of this
+-- project has no GUI.lua in it, and an installer that looked for one would be
+-- looking for a file that is not there.
+local GUI_REPO = @GUIREPO@
+local GUI_BRANCH = @GUIBRANCH@
+
+-- Its path in that repository, and the size it has to come back at.
+local GUI_PATH = "GUI.lua"
+local GUI_SIZE = @GUISIZE@
 
 -- fetch path, expected size, path to write
 local FILES = {
@@ -494,11 +557,22 @@ end
 -- so both are rejected without ever being written anywhere. The file is
 -- downloaded once more afterwards, which costs one request and keeps this free
 -- of any state to carry around.
-local function discover(path, size)
-  if REPO == "" then
-    return nil
+--
+-- `repo` and `branch` are taken rather than read off the file's own locals because
+--- this is called for two repositories: this one, and CC-GUI's.
+--
+-- The reason the last attempt failed is returned rather than printed, because the
+-- two callers want different things from it: the main one has a long message about
+-- allowlists and forks to put it in, and the CC-GUI one has a shorter one about an
+-- optional dependency.
+local function discover(repo, branch, path, size)
+  if repo == "" then
+    -- A reason rather than a nil, because the caller assigns what comes back into a
+    -- variable it then prints: a nil there is a crash in the message about the
+    -- failure, which is the one moment a program is allowed no other problem.
+    return nil, "this installer has no repository to look in"
   end
-  local list = candidates(REPO, BRANCH)
+  local list = candidates(repo, branch)
   local last
   for index, base in ipairs(list) do
     say("trying " .. base)
@@ -512,11 +586,7 @@ local function discover(path, size)
       break
     end
   end
-  -- Kept for the caller, which needs to tell a blocked host apart from a host
-  -- that simply does not serve files this way.
-  DISCOVERY = tostring(last)
-  say("no candidate worked; the last said: " .. DISCOVERY)
-  return nil
+  return nil, tostring(last)
 end
 
 local function one(base, entry)
@@ -533,6 +603,10 @@ end
 
 local function run(argv)
   local base, bundle = BASE, false
+  -- The repository this install comes from, as locals: `discover` takes them as
+  -- arguments now that it is called for a second repository too, and a file-level
+  -- local read through a parameter list is a local that is not there.
+  local repo, branch = REPO, BRANCH
   for index = 1, #argv do
     local item = argv[index]
     if item == "--bundle" then
@@ -549,8 +623,12 @@ local function run(argv)
     -- Probe with the first file either way: it is the one every candidate has
     -- to serve, and its size is the only thing that can tell a file from a page.
     local probe = list[1]
-    base = discover(probe[1], probe[2])
-    if not base then
+    local found, reason = discover(repo, branch, probe[1], probe[2])
+    if found then
+      base = found
+    else
+      DISCOVERY = reason
+      say("no candidate worked; the last said: " .. DISCOVERY)
       if DISCOVERY:find("allowlist", 1, true) then
         say("That is a server setting, not a network problem, and it is the")
         say("usual reason an install cannot get started. Add to")
@@ -584,7 +662,6 @@ local function run(argv)
     end
   end
   base = base:gsub("/+$", "") .. "/"
-
   say("installing " .. #list .. " file(s) from " .. base .. " into " .. DIR)
   local bytes, done = 0, 0
   for _, entry in ipairs(list) do
@@ -604,6 +681,42 @@ local function run(argv)
     say(string.format("  ok    %-26s %7d bytes", entry[1], entry[2]))
   end
 
+  -- CC-GUI, which the interface is built on, fetched from its own repository and
+  -- written beside the program so the bundle finds it too.
+  --
+  -- Optional, and that is the whole of the difference between this and the loop above.
+  -- The program asks for it with a `pcall` and carries on without it, on the plain
+  -- screen; nothing else in this install has that property. So a failure here is
+  -- reported and the run goes on, and the program itself says why its screen is
+  -- plainer -- an installer that refused to install the program because an optional
+  -- dependency could not be fetched would leave a computer with nothing on it.
+  local guiBase, guiReason = discover(GUI_REPO, GUI_BRANCH, GUI_PATH, GUI_SIZE)
+  local guiOk = false
+  if guiBase then
+    guiBase = guiBase:gsub("/+$", "") .. "/"
+    local body, err = fetch(guiBase .. GUI_PATH)
+    if body and #body == GUI_SIZE then
+      local written, writeErr = write(DIR .. "/" .. GUI_PATH, body)
+      if written then
+        guiOk = true
+        bytes = bytes + GUI_SIZE
+        say("  ok    GUI.lua")
+      else
+        say("  FAIL  GUI.lua")
+        say("        " .. tostring(writeErr))
+      end
+    else
+      say("  FAIL  GUI.lua")
+      say("        " .. tostring(err or ("got " .. #body .. " bytes, expected " .. GUI_SIZE)))
+    end
+  end
+  if not guiOk then
+    say("the interface is unavailable without it: the program runs on the plain")
+    say("screen, and says so the first time it starts. It can be fetched by hand:")
+    say("  wget " .. GUI_REPO .. "/raw/branch/" .. GUI_BRANCH .. "/GUI.lua")
+  end
+
+  -- `./` is not decoration.
   -- `./` is not decoration. A ComputerCraft shell finds a program by name on the
   -- program path, which on a computer is `/rom/programs` -- a directory that is
   -- read-only, so nothing can be installed there and a bare name never resolves.
@@ -616,7 +729,11 @@ local function run(argv)
   -- twice over here: no such program is installed, and its argument would be read
   -- as a question to send the model.
   local program = bundle and "opencode.lua" or "init.lua"
-  say(string.format("installed %d file(s), %d bytes, into %s", #list, bytes, DIR))
+  -- CC-GUI counts as a file when it arrived, because it did: it is written beside the
+  -- program and the program finds it there. Not counting it would be a report that
+  -- says less than was done.
+  local installed = #list + (guiOk and 1 or 0)
+  say(string.format("installed %d file(s), %d bytes, into %s", installed, bytes, DIR))
   say("run it with:  ./" .. program)
   say("or in Lua:    shell.run(\"./" .. program .. "\")")
   return 0
@@ -630,6 +747,9 @@ return run(arg or {})
   URL = string.format("%q", base),
   REPO = string.format("%q", repo),
   BRANCH = string.format("%q", branch),
+  GUIREPO = string.format("%q", GUI_REPO),
+  GUIBRANCH = string.format("%q", GUI_BRANCH),
+  GUISIZE = tostring(guiSize()),
   FILES = entries(files),
   BUNDLE = entry(BUNDLE, "opencode.lua"),
 })

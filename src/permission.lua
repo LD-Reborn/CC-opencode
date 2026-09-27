@@ -64,6 +64,28 @@ local function prompt(question, monitor)
   return util.trim(line):lower()
 end
 
+--- Put the question on screen and get the answer back, whichever screen this is.
+--
+-- A UI screen is asked itself, because that is the whole reason it exists: `read`
+-- draws nothing, so the question went to a monitor nobody was reading while the
+-- answer was typed blind at the terminal. A plain screen is not, and the question
+-- goes down the path above unchanged -- `--plain` is meant to be the screen this
+-- program had before, byte for byte, and a change to its prompt would be a change
+-- to what it is for.
+--
+-- The `ask` method is the interface, and the check is for its existence rather
+-- than for this module knowing what kind of screen it has been handed.
+local function askOn(screen, title, permission, patterns)
+  if not screen or type(screen.ask) ~= "function" then
+    return nil
+  end
+  local reply = screen:ask({ title = title, permission = permission, patterns = patterns })
+  if reply == nil then
+    return "n"
+  end
+  return util.trim(reply):lower()
+end
+
 --- Ask the operator to approve `permission` for `patterns`.
 --
 -- Returns "allow", "deny", or "feedback:<message>" — a rejection carrying the
@@ -78,22 +100,33 @@ function M.ask(input)
   end
 
   local patterns = input.patterns or { "*" }
-  local shown = {}
-  for index, pattern in ipairs(patterns) do
-    if index > 4 then
-      shown[#shown + 1] = string.format("  ...and %d more", #patterns - 4)
-      break
+  local monitor = input.monitor
+
+  -- The plain path's question, a function so that a UI screen never builds it: the
+  -- text here is four lines for a dialog, and a dialog that renders it as a dialog
+  -- is not a dialog with a header, buttons and a hint line.
+  local function plainQuestion()
+    local shown = {}
+    for index, pattern in ipairs(patterns) do
+      if index > 4 then
+        shown[#shown + 1] = string.format("  ...and %d more", #patterns - 4)
+        break
+      end
+      shown[#shown + 1] = "  " .. pattern
     end
-    shown[#shown + 1] = "  " .. pattern
+
+    local lines = { string.format("Permission required: %s", input.permission), table.concat(shown, "\n") }
+    if input.title then
+      lines[#lines + 1] = input.title
+    end
+    lines[#lines + 1] = "[y] once  [a] always  [n] no"
+    return table.concat(lines, "\n") .. "\n> "
   end
 
-  local lines = { string.format("Permission required: %s", input.permission), table.concat(shown, "\n") }
-  if input.title then
-    lines[#lines + 1] = input.title
+  local reply = askOn(monitor, input.title, input.permission, patterns)
+  if reply == nil then
+    reply = prompt(plainQuestion(), monitor)
   end
-  lines[#lines + 1] = "[y] once  [a] always  [n] no"
-
-  local reply = prompt(table.concat(lines, "\n") .. "\n> ", input.monitor)
   if reply == "y" or reply == "yes" then
     return M.ALLOW
   end

@@ -2,9 +2,16 @@
 --
 -- Two ways to use it:
 --
---   opencode                     interactive, on a monitor if one is attached
+--   opencode                     interactive, on the computer's own terminal
 --   opencode "list the programs" one turn, print the answer, exit
 --   opencode run "..."           the same, spelled out
+--
+-- The interactive session draws itself with CC-GUI: a title bar, the conversation,
+-- a hint line and an input field, with the conversation kept so it can be scrolled
+-- back through. `--plain` is the screen that was here before -- printed text,
+-- wrapped, on a monitor if one is attached -- and it is still what a one-shot
+-- `opencode "<question>"` uses, because the point of a one-shot is the output that
+-- is left on the terminal when the program exits.
 --
 -- Everything below is presentation: argument parsing, the REPL, and rendering the
 -- agent's events onto a screen. The work itself is in src/agent.lua.
@@ -73,6 +80,7 @@ local session = require("session")
 local agent = require("agent")
 local registry = require("tool/registry")
 local permission = require("permission")
+local ui = require("ui")
 
 local M = {}
 
@@ -125,21 +133,48 @@ local function summarise(part)
   return ""
 end
 
+--- The GUI the interactive session is drawing on, or nil.
+--
+-- A lookup rather than a parameter, because the whole program draws on one screen
+-- and threading it through the agent loop to reach a title bar would be threading
+-- a screen through the agent loop to reach a title bar.
+local function screenUI()
+  return M.state and M.state.ui
+end
+
 --- Render the agent's events. This is the whole UI: one line per tool call, the
 --- answer as it arrives, and a usage footer.
 local function renderer(monitor)
+  -- What the title bar says is happening. A no-op on a plain screen, which has no
+  -- title bar, and cheap enough to be called for every delta of a streamed reply.
+  local function status(text, colour)
+    local screen = screenUI()
+    if screen then
+      screen:setStatus(text, colour)
+    end
+  end
+
   return function(event)
     if event.type == "text" then
       out(monitor, event.delta)
+      status("writing", LIGHT_GRAY)
     elseif event.type == "reasoning" then
       line(monitor, "(reasoning) " .. event.text, LIGHT_GRAY)
+      status("thinking", LIGHT_GRAY)
+    elseif event.type == "step" then
+      status(string.format("step %d/%d", event.step, event.max), LIGHT_GRAY)
     elseif event.type == "tool_start" then
       local part = event.part
       line(monitor, "  * " .. part.tool .. " " .. summarise(part), LIGHT_GRAY)
+      status(part.tool, LIGHT_GRAY)
     elseif event.type == "tool_end" then
       local part = event.part
+      -- The bar goes quiet once a tool is done, so a long run shows a tool name
+      -- while it is working and nothing at all while the answer is being written.
+      status(nil)
       if part.state.status == "error" then
         line(monitor, "    ! " .. tostring(part.state.error), RED)
+        status("error", RED)
       else
         -- A tool whose title is the thing the start line already named — read
         -- and webfetch, mostly — has nothing to add by repeating it.
@@ -159,6 +194,7 @@ local function renderer(monitor)
       line(monitor, "(summarised the earlier conversation to fit the context window)", LIGHT_GRAY)
     elseif event.type == "error" then
       line(monitor, tostring(event.message), RED)
+      status("error", RED)
     elseif event.type == "aborted" then
       line(monitor, "(aborted)", YELLOW)
     end
@@ -375,13 +411,22 @@ end
 
 --- Read one line from the operator, or nil at end of input.
 --
--- The cursor and the line editing are `read`'s own business on ComputerCraft, so
--- this neither blinks the cursor nor reads a key: it hands the question to the
--- same call the shell uses for its own command line. `read` echoes what is typed
--- and leaves the cursor wherever the operator finished, which the screen's
--- wrapping knows nothing about — so the blank line the loop writes before the
--- next prompt is what puts the two back in agreement.
+-- Two implementations, and the choice is the screen rather than a preference. On a
+-- plain screen this hands the question to CraftOS's `read`: the cursor and the line
+-- editing are `read`'s own business there, and it echoes what is typed and leaves
+-- the cursor wherever the operator finished, which the screen's wrapping knows
+-- nothing about — so the blank line the loop writes before the next prompt is what
+-- puts the two back in agreement.
+--
+-- On a GUI it is the screen's own field, which is drawn where it can be seen and
+-- has the history and the caret drawn with it. `read` cannot be used there: the
+-- GUI has taken the screen, so what `read` echoes lands on top of the conversation
+-- and then scrolls away with the next repaint.
 local function prompt()
+  local screen = screenUI()
+  if screen then
+    return screen:readLine()
+  end
   return env.readLine()
 end
 
@@ -393,10 +438,20 @@ end
 
 --- The interactive loop.
 local function repl(monitor)
+  local screen = screenUI()
   banner(monitor, M.state)
+  if screen then
+    -- What is in the banner is what the title bar has room for, and the title bar
+    -- is what is in view when the conversation has scrolled: the model and the
+    -- agent, not the line of text that is already on screen.
+    screen:setSubtitle(string.format("%s  %s", M.state.config.model, M.state.agent))
+    screen:setStatus("idle")
+  end
   while true do
-    line(monitor, "")
-    out(monitor, "> ", LIGHT_GRAY)
+    if not screen then
+      line(monitor, "")
+      out(monitor, "> ", LIGHT_GRAY)
+    end
     local input = prompt()
     if input == nil then
       return
@@ -450,13 +505,14 @@ local function usage(monitor)
   line(monitor, "  --dir <path>     working directory (default: the shell's)", LIGHT_GRAY)
   line(monitor, "  --save           save the session when it ends", LIGHT_GRAY)
   line(monitor, "  --stream         ask the provider for a stream", LIGHT_GRAY)
+  line(monitor, "  --plain          the plain screen: no GUI, prints and wraps", LIGHT_GRAY)
   line(monitor, "  --help           this list", LIGHT_GRAY)
 end
 
 --- Split the program's arguments. `run` is accepted and ignored so the one-shot
 --- form can be spelled out.
 local function parse(argv)
-  local options = { save = false, stream = false, help = false }
+  local options = { save = false, stream = false, help = false, plain = false }
   local rest = {}
   local index = 1
   while index <= #argv do
@@ -469,6 +525,9 @@ local function parse(argv)
       index = index + 1
     elseif item == "--stream" then
       options.stream = true
+      index = index + 1
+    elseif item == "--plain" then
+      options.plain = true
       index = index + 1
     elseif item == "--help" or item == "-h" then
       options.help = true
@@ -505,6 +564,10 @@ function M.setup(argv, monitor)
     autoSave = options.save,
     stream = options.stream,
     enabled = nil,
+    -- The GUI, once one has been built. Nil here on purpose rather than left over
+    -- from a previous call: this table is replaced on every run, and a stale `ui`
+    -- here would have the second run drawing on a screen the first one closed.
+    ui = nil,
   }
   current.enabled = current.config.tools
 
@@ -517,6 +580,34 @@ function M.setup(argv, monitor)
 
   M.state = current
   return current, options
+end
+
+--- The screen an interactive session draws on: the GUI, or the plain one.
+--
+-- Returns the screen, and the reason for not having a GUI when there is one to
+-- give. The reason is said out loud rather than swallowed, because every way of
+-- getting here is something the person in front of the computer can fix: a
+-- `GUI.lua` that was not installed, a terminal too small for a title bar and a hint
+-- line, a CraftOS with no event queue to read the keyboard from. Saying which one
+-- it was is the difference between "the interface is broken" and "copy GUI.lua".
+--
+-- `--plain` gives no reason: it is the screen being asked for by name, not a
+-- fallback, and saying so would read as an apology.
+--
+-- The GUI is always drawn on the terminal, whatever screen the caller passed. CraftOS
+-- sends the keyboard to the terminal and `read` reads the terminal, so a field on a
+-- monitor is a field nobody can reach, and the conversation is no use if the
+-- answer cannot be typed.
+local function interactiveScreen(options, fallback)
+  if options.plain then
+    return fallback
+  end
+  local screen, reason = ui.open(env.console())
+  if not screen then
+    return fallback, reason
+  end
+  M.state.ui = screen
+  return screen
 end
 
 --- Program entry point. Returns the shell exit code.
@@ -543,9 +634,18 @@ function M.main(argv, monitor)
   end
 
   if options.question ~= "" then
+    -- Deliberately the plain screen even with a GUI available. A one-shot's output
+    -- is whatever is on the terminal when the program exits, and a screen that
+    -- clears itself and keeps a scrollback nobody can reach once the program has
+    -- gone is a worse answer to `opencode "what is 2 + 2"` than printed text.
     return once(monitor, options.question)
   end
-  repl(monitor)
+
+  local screen, reason = interactiveScreen(options, monitor)
+  if reason then
+    line(monitor, "plain screen: " .. reason, LIGHT_GRAY)
+  end
+  repl(screen)
   return 0
 end
 

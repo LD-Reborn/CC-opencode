@@ -59,6 +59,16 @@ That length check doubles as a staleness check. If a file on the remote is not
 the one the installer was generated from — a commit behind, say — the sizes
 differ, and it says so rather than writing the older file over the newer one.
 
+The installer also fetches `GUI.lua`, which the interface is built on. It comes
+from [CC-GUI](https://github.com/LD-Reborn/CC-GUI)'s own repository rather than
+from this one, because it is not in this one, and it is fetched the same way —
+a search over the same host shapes, keeping the first that returns a file of
+the expected length. It is optional: the program asks for it with a `pcall` and
+carries on without it, on the plain screen, so a computer that cannot reach
+that repository still gets a working install and says what it is missing. Point
+the search at a fork with `--gui-repo` / `--gui-branch`, which the installer
+accepts as flags.
+
 If the repository is private, or the host is one this list does not cover, pass
 the base url yourself and skip the guessing:
 
@@ -73,11 +83,12 @@ repository rather than to whichever remote it was built from:
 
 ```
 lua install.lua --repo https://github.com/LD-Reborn/CC-opencode
+lua install.lua --gui-repo https://github.com/you/CC-GUI --gui-branch main
 ```
 
 ### The single file
 
-`dist/opencode.lua` is the whole program in one 160 KB file, with the library
+`dist/opencode.lua` is the whole program in one 236 KB file, with the library
 inlined. Nothing to keep in sync, and it is the better choice on a small disk:
 
 ```
@@ -95,10 +106,19 @@ allowlist as everything else here.
 filesystem root means `opencode.json` next to it and the shell's working
 directory are the same place.
 
+The interface is **not** in this file. `GUI.lua` is CC-GUI's, a separate project
+under the GPL, and the program treats it as an optional dependency: it asks for
+it beside the program and carries on without it. So the single file is
+`opencode` plus `GUI.lua` — copy both, or build one with the interface inlined:
+
+```
+lua build.lua --gui ../CC-GUI/GUI.lua
+```
+
 ### The modular checkout
 
 For reading, hacking on, or updating the source, install the tree instead. It is
-the same program in 23 files:
+the same program in 24 files:
 
 ```
 init.lua              the entry point
@@ -211,6 +231,13 @@ array means everything on the whitelist is reachable.
 
 Nothing else: no `cc-tweaked` modules, no `os.getenv`, no `io`. Lua 5.1 only —
 the source uses no 5.2+ syntax.
+
+The interface wants three more things, each absent rather than broken: `paintutils`
+to draw the boxes, `keys` to name a key code, and `os.pullEvent` to wait for the
+operator. The first two degrade — a CraftOS without them draws a plainer screen
+— and the third is the one that matters, because a program that cannot hear the
+keyboard cannot be asked anything. All three are read once, at startup, and each
+is nil when this build of CraftOS does not have it.
 
 ## Configure
 
@@ -400,7 +427,7 @@ rule as well; see [What it needs](#what-it-needs).
 ## Use
 
 ```
-./opencode                    interactive, on a monitor if one is attached
+./opencode                    interactive, on the interface
 ./opencode "list the programs" one turn, print the answer, exit
 ./opencode run "..."           the same, spelled out
 ```
@@ -416,6 +443,7 @@ same either way.
 | `--dir <path>` | Working directory, relative to the shell's |
 | `--save` | Save the session when the run ends |
 | `--stream` | Ask the provider for an event stream |
+| `--plain` | The plain screen: no interface, prints and wraps |
 | `--help` | The option list |
 
 In the REPL, anything that is not a command is a question:
@@ -436,9 +464,77 @@ Sessions are written to `opencode/session/<id>.json` under the working
 directory. They are plain JSON with the full message and part list, so a session
 is readable and comparable without this program.
 
-A monitor is used when one is attached, and the terminal otherwise. One-shot mode
-exits nonzero if the turn ended in a provider or transport error, so a shell
-script or a wrapper can tell.
+One-shot mode exits nonzero if the turn ended in a provider or transport error,
+so a shell script or a wrapper can tell.
+
+## The interface
+
+An interactive session draws a screen rather than printing to one. A computer
+terminal is 51 columns wide, and the plain screen — which is what this program
+had before — let a reply run off the right edge and lose the rest, and let a
+long conversation scroll off the top and lose that. The interface keeps both.
+
+It is built on [CC-GUI](https://github.com/LD-Reborn/CC-GUI), which supplies the
+widgets: the input field with its text, caret and scroll window, and the
+buttons. Everything around them is this program's — the layout, the transcript,
+the wrapping, the drawing — because CC-GUI does not enforce its own boundaries
+and a label one column too wide would otherwise carry onto the next row and
+shred whatever was there.
+
+The screen is three rows of chrome and the conversation between them:
+
+```
+opencode  opencode/space-bunny-free  build  writing     ← title bar: model, agent, status
+  * read /very/long/path/that/keeps/going/and/going      ← the tool log, grey
+    ! File not found: /very/long/path/that/keeps/going  ← an error, red
+It has two lines.                                        ← the answer, white
+                                                            (a reply still arriving)
+enter sends  /help lists  New   Save   Help   Exit        ← hint line and buttons
+> _                                                         ← the input field
+```
+
+The transcript is a scrollback, not a list: it is capped at 1000 lines, and
+what falls off the top is counted and said on screen rather than dropped
+quietly. A reply that is still arriving is drawn as it is written, so a long
+answer appears while the turn is still running rather than all at once at the
+end.
+
+**It draws on the terminal, never on a monitor.** CraftOS's keyboard belongs to
+the terminal, so a field drawn on a monitor is a field nobody can reach — the
+conversation is no use if the answer cannot be typed. A monitor is still what
+the plain screen prefers, and `--plain` is how you get that instead.
+
+**Keys**, beyond what the field does on its own:
+
+| Key | Effect |
+| --- | --- |
+| Enter | Send the line |
+| Up, down | Walk back through what this session has been asked |
+| Page up, page down | Scroll the conversation a screenful |
+| Home, Ctrl | Back to the start of the conversation |
+| End | Follow the newest line again |
+
+The buttons on the hint line are clickable, and answer with the command they
+stand for — so there is one implementation of `/help` rather than two.
+
+**`--plain` is the escape hatch**, and it is the screen this program had before
+the interface: prints, wraps, and nothing drawn. It is also what a one-shot
+`opencode "<question>"` uses, because its output is whatever is left on the
+terminal when the program exits, and a screen that clears itself and keeps a
+scrollback nobody can reach once the program has gone is a worse answer than
+printed text.
+
+**Without `GUI.lua` the program says so and carries on.** Every way of not
+getting an interface — no `GUI.lua` beside the program, a terminal too small
+for a title bar and a hint line, a CraftOS with no event queue to read the
+keyboard from — is reported out loud, because each is something the person in
+front of the computer can fix. `--plain` gives no reason: it was asked for by
+name.
+
+CC-GUI is GPL-3.0, and this program is not; `GUI.lua` is therefore kept as a
+separate file rather than inlined into the bundle by default, so the two
+licences stay separate. `lua build.lua --gui <path>` inlines it for a checkout
+that wants one file.
 
 ## The tools
 
@@ -530,14 +626,16 @@ This is a port, and the port is not cosmetic. The things that differ:
   right edge onto the next row; the tail is discarded, so on a 51-column terminal
   the end of every long line, the tail of every url, and the part of an error
   message that says what to do about it never arrive. The screen adapter in
-  `src/environment.lua` is where the wrapping lives, not the REPL: it is the one
-  place every drawn character passes through, so a new caller cannot get it wrong
-  by forgetting, and it carries the column between writes because a reply arrives
-  in pieces. It is worth knowing this was found the hard way — the answer itself
-  was written raw while everything *around* it wrapped, so asking for a list of
-  files lost every path past column 51. The mock's screen now discards an
-  overlong row the way ComputerCraft does, and records how many characters were
-  lost, so `lost == 0` is an assertion the suite makes.
+  `src/environment.lua` is where the wrapping lives for the plain screen, not
+  the REPL: it is the one place every drawn character passes through, so a new
+  caller cannot get it wrong by forgetting, and it carries the column between
+  writes because a reply arrives in pieces. The interactive screen wraps
+  instead, and hangs the continuation of a long tool line under the tool line's
+  own indent. It is worth knowing this was found the hard way — the answer
+  itself was written raw while everything *around* it wrapped, so asking for a
+  list of files lost every path past column 51. The mock's screen now discards
+  an overlong row the way ComputerCraft does, and records how many characters
+  were lost, so `lost == 0` is an assertion the suite makes.
 - **`shell` is not a global.** It is a standard program that injects its API into
   the programs it launches, so it is present when the shell runs you and absent
   otherwise. Everything that needs the shell goes through the environment module,
@@ -585,18 +683,23 @@ lua test/run.lua agent      # one suite: json util pattern provider http llm
 lua build.lua               # writes dist/opencode.lua
 lua build.lua --out /tmp/o.lua
 lua build.lua --test        # build, then run the bundle against the mock
+lua build.lua --gui ../CC-GUI/GUI.lua   # inline CC-GUI into the bundle
 ```
 
 ```
 lua install.lua             # writes dist/install.lua
 lua install.lua --url <base url>
+lua install.lua --gui-repo <url> --gui-branch <name>
 ```
 
 `build.lua` derives the module order from the require graph, refuses to emit a
 bundle with an unresolved `require`, checks that the output parses, and with
 `--test` runs the generated bundle in a fresh process where the only source of
-modules is the bundle itself. `CCOPENCODE_DEBUG_BUNDLE=<path>` writes the
-generated source there instead of running it.
+modules is the bundle itself. `GUI` is the one `require` that is allowed to be
+unresolved, because CC-GUI is an optional dependency and a missing one is
+survivable; `--gui <path>` inlines it, and without it the build says so and
+carries on. `CCOPENCODE_DEBUG_BUNDLE=<path>` writes the generated source there
+instead of running it.
 
 `install.lua` writes the ComputerCraft-side installer: the file list, each file's
 size, and the remote and branch from git. It checks that the result parses. The
@@ -610,6 +713,7 @@ init.lua                  argument parsing, the REPL, rendering
 install.lua               the generator for dist/install.lua
 src/
   environment.lua         the only module that touches fs/shell/http/term
+  ui.lua                  the interactive screen: layout, transcript, wrapping
   json.lua                encode and decode, with a distinct null
   pattern.lua             regex to Lua pattern
   http.lua                requests, retries, backoff, SSE framing

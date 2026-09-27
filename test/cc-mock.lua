@@ -12,8 +12,20 @@ M.commands = {}
 M.requests = {}
 M.responses = {}
 M.failures = {}
+M.events = {}
 M.sleeps = 0
 M.hang = false
+M.redirected = nil
+M.clock = 0
+M.clockStep = 1
+M.closed = false
+M.pulled = 0
+M.budget = 10000
+-- How many past frames a screen keeps. Enough for a test to look back through a
+-- dialog and the conversation under it; bounded, because a GUI repaints on every
+-- keystroke and a test that typed a few hundred characters would otherwise be
+-- holding a few hundred grids in memory.
+M.MAX_FRAMES = 200
 
 local function quote(s)
   return "'" .. tostring(s):gsub("'", "'\\''") .. "'"
@@ -31,6 +43,31 @@ local function probe(test, path)
   return out:match("^yes") ~= nil
 end
 
+--- Put the mock's transient state back to how it started.
+--
+-- Split out of `setup` because a spec that drives a key loop needs a fresh event
+-- queue and a fresh budget between its own tests without also wiping the canned
+-- responses and the filesystem it just arranged.
+--
+-- The globals are cleared as well, and that is the half of it that is easy to miss: a
+-- terminal or a peripheral left over from the previous test is a screen the next one
+-- will draw on and a keyboard it will read from, and the failure shows up several
+-- tests later as an interface that opened where it should not have.
+function M.reset()
+  M.events = {}
+  M.sleeps = 0
+  M.hang = false
+  M.redirected = nil
+  M.clock = 0
+  M.clockStep = 1
+  M.closed = false
+  M.pulled = 0
+  M.budget = M.budget or 10000
+  _G.term = nil
+  _G.peripheral = nil
+  return M
+end
+
 --- Point the mock filesystem at a fresh temp directory.
 function M.setup(root)
   M.root = root or (os.getenv("TMPDIR") or "/tmp") .. "/opencode-test"
@@ -40,9 +77,7 @@ function M.setup(root)
   M.requests = {}
   M.responses = {}
   M.failures = {}
-  M.sleeps = 0
-  M.hang = false
-  return M.root
+  return M.reset()
 end
 
 --- Queue one canned response. `response` is `{ status, body }` or a plain string.
@@ -423,19 +458,32 @@ function M.install()
     end,
   }
 
+  -- The full ComputerCraft palette, at the values CC:Tweaked actually uses.
+  --
+  -- CC-GUI names colours its callers pass in, and a mock holding only the handful
+  -- this project used to answer nil for the rest -- so a widget that asked for
+  -- `colors.green` would draw an invisible one here and be perfectly correct on
+  -- a computer. The encoding is a terminal colour index for the first eight, then
+  -- one bit per further colour, which is why `white` is 0 and `black` is not.
   _G.colors = {
-    white = 1,
-    orange = 2,
-    magenta = 3,
-    lightBlue = 4,
-    yellow = 5,
-    lime = 6,
-    pink = 7,
-    gray = 8,
+    white = 0,
+    orange = 1,
+    magenta = 2,
+    lightBlue = 3,
+    yellow = 4,
+    lime = 5,
+    pink = 6,
+    gray = 7,
     lightGray = 128,
     cyan = 256,
+    blue = 512,
+    brown = 1024,
+    green = 2048,
+    red = 4096,
+    black = 8192,
+    lightRed = 16384,
+    darkGray = 32768,
   }
-  _G.colors.red = 16384
   _G.term = nil
   _G.peripheral = nil
   M.sleeps = 0
@@ -455,21 +503,351 @@ function M.install()
   _G.os.sleep = function(seconds)
     M.sleeps = M.sleeps + (seconds or 0)
   end
+  -- A handle the program can hand back to `os.cancelTimer`, so that a screen is a
+  -- real object here as well. Nothing else looks inside it.
+  local timerSerial = 0
   _G.os.startTimer = function(seconds)
-    return { timer = seconds or 0 }
+    timerSerial = timerSerial + 1
+    return { timer = timerSerial, seconds = seconds or 0 }
   end
-  _G.os.cancelTimer = function() end
-  _G.os.pullEvent = function()
-    return "timer"
+  _G.os.cancelTimer = function(handle)
+    for index, queued in ipairs(M.events) do
+      if queued[1] == "timer" and queued[2] == handle then
+        table.remove(M.events, index)
+        return
+      end
+    end
+  end
+  -- The event queue, so a program that drives its own key loop can be tested.
+  --
+  -- A real terminal is an event source and a program that polls one blocks until
+  -- something happens; the old stub answered "timer" unconditionally, which let a
+  -- key loop spin forever instead of failing. Now it hands out what a test queued.
+  --
+  -- What it does with an empty queue is the part that matters, and it is not
+  -- "wait". A test that queues three keys and calls a read wants to be handed those
+  -- three keys and then to have the read *end* -- that is what "the operator typed
+  -- three characters and the program stopped reading" looks like -- and an endless
+  -- "timer" answers neither: the read runs to the pull budget, repaints the screen
+  -- ten thousand times, and returns a nil that says nothing about what happened.
+  -- So an unfiltered pull on an empty queue is the end of input, the same nil
+  -- `os.pullEvent` gives when the program is shutting down. A *filtered* pull still
+  -- answers a timer, because that is how `util.sleep` waits for one.
+  _G.os.pullEvent = function(filter, timeout)
+    if M.closed then
+      return nil
+    end
+    -- A budget, so a program that waits for an event that is never coming ends as
+    -- "end of input" instead of running until the suite is killed. Ten thousand is
+    -- far more than any of these programs spends waiting for a real key, and the
+    -- alternative is a run that hangs with no output, which is the one failure
+    -- mode that tells the person who hit it nothing at all.
+    M.pulled = M.pulled + 1
+    if M.budget and M.pulled > M.budget then
+      return nil
+    end
+    local fallback = timeout and { "timer", os.startTimer and 0 or 0 } or nil
+    for index, event in ipairs(M.events) do
+      if not filter or event[1] == filter then
+        if index == 1 then
+          table.remove(M.events, 1)
+        else
+          M.events[index] = M.events[#M.events]
+          M.events[#M.events] = nil
+        end
+        return unpack(event, 1, #event)
+      end
+    end
+    -- Nothing left, and nothing to wait for: the end of input. See the note above.
+    if not fallback then
+      return nil
+    end
+    return unpack(fallback, 1, 2)
   end
   _G.os.getComputerLabel = function()
     return "testbed"
   end
+  -- The clock `os.timer` reports, in seconds, and what advances it.
+  --
+  -- A UI throttles its repaints with this: a streamed answer arrives in hundreds of
+  -- pieces and repainting the screen for each one is the difference between an
+  -- interface that keeps up and one that does not. A test that wants to watch the
+  -- throttle has to be able to stand the clock still, so it is a number here
+  -- rather than a call into the host's clock. It advances by a second on every read
+  -- by default, which is a machine fast enough that every write repaints -- the
+  -- visible behaviour, and what a test asserting on a layout wants.
+  M.clock = 0
+  M.clockStep = 1
+  _G.os.timer = function()
+    M.clock = M.clock + (M.clockStep or 0)
+    return M.clock
+  end
+  _G.os.clock = _G.os.timer
+
+  -- CraftOS's `keys`, which is how a program names a key code. Only the names this
+  -- project and CC-GUI look up are here; anything else answers "unknown", which is
+  -- what CC does for a key bound to nothing.
+  local KEY_NAMES = {
+    [12] = "delete",
+    [14] = "backspace",
+    [28] = "enter",
+    [43] = "tab",
+    [208] = "up",
+    [209] = "down",
+    [210] = "left",
+    [211] = "right",
+    [256] = "left shift",
+    [257] = "right shift",
+    [258] = "left ctrl",
+    [259] = "right ctrl",
+    [260] = "left alt",
+    [261] = "right alt",
+    [274] = "home",
+    [275] = "end",
+    [276] = "insert",
+    [277] = "delete",
+    [278] = "page up",
+    [279] = "page down",
+  }
+  for index = 0, 11 do
+    KEY_NAMES[280 + index] = "f" .. (index + 1)
+  end
+  _G.keys = {
+    getName = function(code)
+      return KEY_NAMES[code] or "unknown"
+    end,
+  }
+
+  -- `paintutils`, which CC-GUI draws its boxes and borders with.
+  --
+  -- It has no screen argument of its own: like the real one it draws to whichever
+  -- terminal `term.redirect` last pointed it at, which is how CC-GUI draws on a
+  -- monitor without passing it in. Straight into the cell grid, and bounded by
+  -- it -- a coordinate outside the screen is dropped, which is the half of the
+  -- boundary rule a GUI library does not do for itself and the reason the mock
+  -- has a grid at all.
+  local function target()
+    return M.redirected or _G.term
+  end
+  -- Every one of these paints a *background*, which is what a filled box, a border
+  -- and a line are on a real screen: the cell's colour, not the colour of some
+  -- character in it. Drawing a space with the colour as its foreground would fill
+  -- the grid's text and leave the background black, so a grey title bar would
+  -- assert as empty.
+  _G.paintutils = {
+    drawPixel = function(x, y, colour)
+      M.pixel(target(), x, y, " ", colors.white, colour)
+    end,
+    drawBox = function(x1, y1, x2, y2, colour)
+      local monitor = target()
+      local x, y = math.min(x1, x2), math.min(y1, y2)
+      local right, bottom = math.max(x1, x2), math.max(y1, y2)
+      for column = x, right do
+        M.pixel(monitor, column, y, " ", colors.white, colour)
+        M.pixel(monitor, column, bottom, " ", colors.white, colour)
+      end
+      for row = y, bottom do
+        M.pixel(monitor, x, row, " ", colors.white, colour)
+        M.pixel(monitor, right, row, " ", colors.white, colour)
+      end
+    end,
+    drawFilledBox = function(x1, y1, x2, y2, colour)
+      local monitor = target()
+      local x, y = math.min(x1, x2), math.min(y1, y2)
+      local right, bottom = math.max(x1, x2), math.max(y1, y2)
+      for row = y, bottom do
+        for column = x, right do
+          M.pixel(monitor, column, row, " ", colors.white, colour)
+        end
+      end
+    end,
+    drawLine = function(x1, y1, x2, y2, colour)
+      local monitor = target()
+      local dx, dy = math.abs(x2 - x1), math.abs(y2 - y1)
+      local sx = x1 < x2 and 1 or -1
+      local sy = y1 < y2 and 1 or -1
+      local err = dx - dy
+      while true do
+        M.pixel(monitor, x1, y1, " ", colors.white, colour)
+        if x1 == x2 and y1 == y2 then
+          break
+        end
+        local double = err * 2
+        if double > -dy then
+          err = err - dy
+          x1 = x1 + sx
+        end
+        if double < dx then
+          err = err + dx
+          y1 = y1 + sy
+        end
+      end
+    end,
+  }
 end
 
 --- Every file written during the test, for assertions.
 function M.writtenFiles()
   return M.writes
+end
+
+--- Put one character in one cell of a screen's grid.
+--
+-- Bounded, and the bound is the interesting part: a coordinate outside the screen
+-- is dropped and counted rather than clamped. A GUI library that does not enforce
+-- its own boundaries draws a box one column past the right edge, and on a real
+-- ComputerCraft screen that overflow wraps to the next row and shreds whatever
+-- was already there. Dropping it here is what lets a test say that nothing
+-- escaped, which is a claim no amount of string matching on `text` can make.
+function M.pixel(screen, x, y, char, fg, bg)
+  if not screen or not screen.grid then
+    return false
+  end
+  x, y = math.floor(tonumber(x) or 0), math.floor(tonumber(y) or 0)
+  if x < 1 or y < 1 or x > screen.size[1] or y > screen.size[2] then
+    screen.outside = screen.outside + 1
+    return false
+  end
+  local index = (y - 1) * screen.size[1] + x
+  screen.grid[index] = char
+  screen.gridFg[index] = fg
+  screen.gridBg[index] = bg
+  return true
+end
+
+--- Queue events for `os.pullEvent`, in order.
+--
+-- `M.queue({ "char", "/" })` and `M.queue({ "key", 28 })` are the two a key loop
+-- sees. Once the queue is empty an unfiltered pull is the end of input, so a read
+-- driven by a test ends when the test has run out of keys to give it rather than
+-- looping to the pull budget.
+function M.queue(...)
+  for _, event in ipairs({ ... }) do
+    M.events[#M.events + 1] = event
+  end
+end
+
+--- Close the program, so the next `os.pullEvent` answers nil.
+--
+-- On a computer nothing does this while a program is running: the terminal blocks
+-- until the operator does something, and the program is gone when they close it.
+-- What it *is* is the end of input, which CraftOS's `read` reports by returning nil
+-- and a hand-rolled key loop has to be able to hear as well -- otherwise a program
+-- waiting for a key that will never arrive spins on a nil event forever instead of
+-- exiting, and a test that wanted to show the exit cannot finish at all.
+function M.close()
+  M.closed = true
+  return M
+end
+
+--- Type a line into the input field a GUI is showing: the chars, then enter.
+function M.type(text, ...)
+  for index = 1, #text do
+    M.queue({ "char", text:sub(index, index) })
+  end
+  M.queue({ "key", 28, "enter" })
+  return M
+end
+
+--- A copy of one of the cell tables, for keeping a frame.
+function M.copyGrid(grid)
+  local out = {}
+  for index = 1, #grid do
+    out[index] = grid[index]
+  end
+  return out
+end
+
+--- The cells a test is reading: the screen's own, or a frame that has ended.
+--
+-- The three accessors below all take this, so every one of them can be pointed at
+-- either. That is the whole of the frame feature: `M.frame(screen, -1)` is the last
+-- frame to end, which is the one that held the dialog, and `M.frameText` and
+-- `M.fg` read it without the test having to know a frame is a table of tables.
+function M.cells(screen, frame)
+  if frame == nil then
+    return screen.grid, screen.gridFg, screen.gridBg
+  end
+  local frames = screen.frames or {}
+  local held = frames[frame > 0 and frame or #frames + frame + 1]
+  if not held then
+    return {}, {}, {}
+  end
+  return held.grid, held.fg, held.bg
+end
+
+--- One row of a screen's grid, as a string, for asserting on a layout.
+function M.row(screen, y, frame)
+  local grid = M.cells(screen, frame)
+  local out = {}
+  for x = 1, screen.size[1] do
+    out[x] = grid[(y - 1) * screen.size[1] + x] or " "
+  end
+  return table.concat(out)
+end
+
+--- The whole grid, rows joined by newlines, for a test that wants to read the screen.
+function M.gridText(screen, frame)
+  local rows = {}
+  for y = 1, screen.size[2] do
+    rows[y] = M.row(screen, y, frame)
+  end
+  return table.concat(rows, "\n")
+end
+
+--- The foreground colour of one cell, for a test asserting on colour rather than text.
+function M.fg(screen, x, y, frame)
+  local _, fg = M.cells(screen, frame)
+  return fg[(y - 1) * screen.size[1] + x]
+end
+
+--- The background colour of one cell.
+function M.bg(screen, x, y, frame)
+  local _, _, bg = M.cells(screen, frame)
+  return bg[(y - 1) * screen.size[1] + x]
+end
+
+--- The newest frame that has `text` anywhere in it, or nil.
+--
+-- For something that is drawn, read, and taken off again inside one call: a permission
+-- dialog, say. Which frame held it depends on how many keys the operator pressed on
+-- the way to the answer, so there is no fixed offset to read -- but the question of
+-- whether it was ever on the screen at all does not depend on that, and that is the
+-- question worth asking.
+function M.frameContaining(screen, text)
+  for index = #screen.frames, 1, -1 do
+    if M.gridText(screen, index):find(text, 1, true) then
+      return index
+    end
+  end
+  return nil
+end
+
+--- Install a screen as the computer's own terminal, so `term` exists.
+--
+-- The GUI draws on the terminal rather than a monitor, because the operator has to
+-- be able to type and CraftOS's keyboard belongs to the terminal. Tests that
+-- exercise it need `term` to be a real screen of a known size, which is what this
+-- gives them; it does not make the screen a peripheral, so `env.terminal()` still
+-- reports no monitor and a test has to say which screen it means.
+function M.console(size, inputs)
+  local screen = M.screen(inputs, size)
+  _G.term = screen
+  screen.redirect = function(monitor)
+    M.redirected = monitor
+    return _G.term
+  end
+  screen.native = function()
+    return _G.term
+  end
+  screen.isColor = function()
+    return false
+  end
+  screen.setPaletteColor = function() end
+  screen.getPaletteColor = function()
+    return "ffffff"
+  end
+  return screen
 end
 
 --- A stand-in for a monitor or terminal.
@@ -497,12 +875,29 @@ function M.screen(inputs, size, notATerminal)
     drawn = {},
     inputs = inputs or {},
     colour = nil,
+    backgroundColour = nil,
     cursorBlink = nil,
     cursor = { 1, 1 },
     size = size or { 200, 50 },
     cleared = 0,
     lost = 0,
+    outside = 0,
+    frames = {},
   }
+  -- The cell grid, alongside the linear record above rather than instead of it.
+  --
+  -- `text` answers "what did the program hand over, in order", which is what a
+  -- printing program needs to be checked on. It cannot tell a title bar from a
+  -- transcript, a button from the text beside it, or whether anything was drawn
+  -- twice on top of itself -- a GUI is geometry, so the same cells are also kept
+  -- by coordinate and a layout can be read one row at a time.
+  local width, height = size and size[1] or 200, size and size[2] or 50
+  screen.grid = {}
+  screen.gridFg = {}
+  screen.gridBg = {}
+  for index = 1, width * height do
+    screen.grid[index] = " "
+  end
   local function collect(text)
     text = tostring(text)
     -- ComputerCraft does not carry a line that overruns its screen: the tail is
@@ -537,8 +932,31 @@ function M.screen(inputs, size, notATerminal)
   -- ComputerCraft calls a screen's methods with a dot (`term.write(text)`), so
   -- they are defined that way here. `env.terminal()` passes the screen as the
   -- first argument, which suits both conventions.
+  --
+  -- `write` does both jobs: it feeds the linear record above, and it paints the
+  -- grid at the cursor. The two are deliberately separate models -- the first
+  -- answers about a program that prints, the second about a program that draws --
+  -- but they read the same text, so a wrapping bug shows up in the first and a
+  -- layout bug in the second without either being arranged for the other.
   screen.write = function(text)
+    text = tostring(text)
     collect(text)
+    local x, y = screen.cursor[1], screen.cursor[2]
+    for index = 1, #text do
+      local char = text:sub(index, index)
+      if char == "\n" then
+        x, y = 1, y + 1
+      else
+        M.pixel(screen, x, y, char, screen.colour, screen.backgroundColour)
+        x = x + 1
+        if x > screen.size[1] then
+          -- A real screen carries the character onto the next row rather than
+          -- losing it, which is why the program has to wrap before this happens.
+          x, y = 1, y + 1
+        end
+      end
+    end
+    screen.cursor = { x, y }
   end
   -- Deliberately no `readLine`. The real `term` module has no such method, and
   -- supplying one here is what let a program that called it pass: the mock
@@ -548,19 +966,49 @@ function M.screen(inputs, size, notATerminal)
   -- pass code that cannot run, which is the whole reason this file exists.
   screen.clear = function()
     screen.cleared = screen.cleared + 1
+    -- The frame that is ending, kept, because the cells afterwards say what the
+    -- program settled on rather than what it put on screen on the way there. A
+    -- permission dialog is the case that needs it: the question is drawn, read,
+    -- and taken off again in one call, and a test that looks at the screen
+    -- afterwards finds an empty one and concludes the dialog was never shown.
+    --
+    -- A copy, since the grid below is about to be emptied. `cleared` counts the
+    -- same moments, so a test counting repaints and a test reading one both work
+    -- off the same place.
+    if #screen.frames >= M.MAX_FRAMES then
+      table.remove(screen.frames, 1)
+    end
+    screen.frames[#screen.frames + 1] = {
+      grid = M.copyGrid(screen.grid),
+      fg = M.copyGrid(screen.gridFg),
+      bg = M.copyGrid(screen.gridBg),
+    }
+    for index = 1, #screen.grid do
+      screen.grid[index] = " "
+      screen.gridBg[index] = nil
+    end
+    screen.cursor = { 1, 1 }
   end
   screen.scroll = function() end
   screen.setCursorBlink = function(state)
     screen.cursorBlink = state
   end
   screen.setCursorPos = function(x, y)
-    screen.cursor = { x, y }
+    -- Clamped rather than refused, as a real screen does, so a caller that asks
+    -- for a cell past the edge still gets a usable cursor.
+    screen.cursor = {
+      math.min(math.max(math.floor(tonumber(x) or 1), 1), screen.size[1]),
+      math.min(math.max(math.floor(tonumber(y) or 1), 1), screen.size[2]),
+    }
   end
   screen.getCursorPos = function()
     return screen.cursor[1], screen.cursor[2]
   end
   screen.setTextColor = function(colour)
     screen.colour = colour
+  end
+  screen.setBackgroundColor = function(colour)
+    screen.backgroundColour = colour
   end
   screen.getSize = function()
     return screen.size[1], screen.size[2]

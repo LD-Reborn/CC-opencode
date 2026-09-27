@@ -38,6 +38,11 @@ return function(t, mock)
       -- finds a terminal the way it would on a computer. Every other test here
       -- hands `main` a screen directly and so never exercises that lookup.
       mock.attach({ monitor_1 = screen })
+      -- And made `term`, because on a computer the screen the self-start path finds is
+      -- the terminal, and `env.console` — the lookup the interface uses — only ever
+      -- looks at `term`. A screen that is only a peripheral is a screen the interface
+      -- will not use, which is the next test but one.
+      _G.term = screen
     end
     shell.getRunningProgram = function()
       return running or "/test/harness.lua"
@@ -305,7 +310,7 @@ return function(t, mock)
     local screen = mock.screen({ "what can you do", "/save", "/exit" })
     mock.respond(textTurn("A lot"))
     mock.respond(textTurn("Asking what I can do"))
-    init.main({}, screen)
+    init.main({ "--plain" }, screen)
     local names = env.listDir(env.combine(mock.root, "opencode", "session"))
     local saved = json.decode(env.read(env.combine(mock.root, "opencode", "session", names[1])))
     t.eq(saved.title, "Asking what I can do", "/save names the session it writes")
@@ -384,7 +389,7 @@ return function(t, mock)
 
     local init = assert(loadInit())
     local screen = mock.screen({ "/help", "/exit" })
-    local code = init.main({}, screen)
+    local code = init.main({ "--plain" }, screen)
 
     t.eq(code, 0, "the REPL reads its lines and exits zero on /exit")
     t.eq(#screen.inputs, 0, "having consumed both of the answers it was given")
@@ -398,7 +403,7 @@ return function(t, mock)
   do
     local init = assert(loadInit())
     local screen = mock.screen({ "/model", "/model opencode/gpt-5-nano", "/model", "/exit" })
-    init.main({}, screen)
+    init.main({ "--plain" }, screen)
     t.contains(screen.text, "opencode/gpt-5-nano", "/model <id> switches the model")
     t.eq(init.state.config.model, "opencode/gpt-5-nano", "the switch is kept in the state")
     t.eq(init.state.model.id, "gpt-5-nano", "the resolved model follows")
@@ -407,7 +412,7 @@ return function(t, mock)
   do
     local init = assert(loadInit())
     local screen = mock.screen({ "/model groq/llama", "/exit" })
-    init.main({}, screen)
+    init.main({ "--plain" }, screen)
     t.contains(screen.text, "No API key", "an unusable model is refused with a reason")
     t.eq(init.state.config.model, "opencode/space-bunny-free", "the previous model is kept")
   end
@@ -419,7 +424,7 @@ return function(t, mock)
     -- and it is listed as available, which is the whole point of it being there.
     local init = assert(loadInit())
     local screen = mock.screen({ "/models", "/exit" })
-    init.main({}, screen)
+    init.main({ "--plain" }, screen)
     t.contains(screen.text, "opencode/space-bunny-free", "/models lists the model that needs no key")
     t.ok(not screen.text:find("space%-bunny%-free%s+.-%(%(no api key%)"), "/models does not mark it as needing a key")
   end
@@ -431,7 +436,7 @@ return function(t, mock)
       provider = { groq = { models = { ["llama-3.3-70b"] = { name = "Llama 3.3 70B" } } } },
     })
     local screen = mock.screen({ "/models", "/providers", "/exit" })
-    init.main({}, screen)
+    init.main({ "--plain" }, screen)
     t.contains(screen.text, "groq/llama-3.3-70b", "/models lists configured models")
     t.contains(screen.text, "openrouter", "/providers lists the built-in providers")
     t.contains(screen.text, "(no api key)", "and marks the ones with no key")
@@ -441,7 +446,7 @@ return function(t, mock)
   do
     local init = assert(loadInit())
     local screen = mock.screen({ "/agent", "/agent plan", "/agent", "/agent explore", "/agent nonsense", "/exit" })
-    init.main({}, screen)
+    init.main({ "--plain" }, screen)
     t.contains(screen.text, "build", "/agent shows the current agent")
     t.contains(screen.text, "agent: plan", "/agent <name> switches")
     t.contains(screen.text, "agent: explore", "and switches again")
@@ -453,7 +458,7 @@ return function(t, mock)
   do
     local init = assert(loadInit())
     local screen = mock.screen({ "/tools", "/exit" })
-    init.main({}, screen)
+    init.main({ "--plain" }, screen)
     for _, id in ipairs({ "bash", "read", "glob", "grep", "edit", "write", "webfetch", "todowrite" }) do
       t.contains(screen.text, id, "/tools lists " .. id)
     end
@@ -462,7 +467,7 @@ return function(t, mock)
   do
     local init = assert(loadInit())
     local screen = mock.screen({ "/new", "/new", "/exit" })
-    init.main({}, screen)
+    init.main({ "--plain" }, screen)
 
     local ids = {}
     for id in screen.text:gmatch("new session (ses_%w+)") do
@@ -478,7 +483,7 @@ return function(t, mock)
   do
     local init = assert(loadInit())
     local screen = mock.screen({ "/save", "/exit" })
-    init.main({}, screen)
+    init.main({ "--plain" }, screen)
     t.contains(screen.text, "saved ", "/save reports the path")
     t.eq(#env.listDir(env.combine(mock.root, "opencode", "session")), 1, "/save wrote one file")
   end
@@ -486,7 +491,7 @@ return function(t, mock)
   do
     local init = assert(loadInit())
     local screen = mock.screen({ "/nonsense", "/exit" })
-    init.main({}, screen)
+    init.main({ "--plain" }, screen)
     t.contains(screen.text, "Unknown command /nonsense", "an unknown command is reported")
     t.contains(screen.text, "Try /help", "and points at the help")
   end
@@ -494,7 +499,7 @@ return function(t, mock)
   do
     local init = assert(loadInit())
     local screen = mock.screen({ "/", "   ", "/exit" })
-    local code = init.main({}, screen)
+    local code = init.main({ "--plain" }, screen)
     t.eq(code, 0, "a bare slash and a blank line are ignored rather than sent")
     t.eq(#mock.requests, 0, "nothing was sent to a model")
   end
@@ -502,7 +507,7 @@ return function(t, mock)
   do
     local init = assert(loadInit())
     local screen = mock.screen({})
-    local code = init.main({}, screen)
+    local code = init.main({ "--plain" }, screen)
     t.eq(code, 0, "a closed terminal ends the REPL cleanly")
     t.contains(screen.text, "opencode for ComputerCraft", "the banner was printed first")
   end
@@ -515,7 +520,7 @@ return function(t, mock)
     env.write(mock.root .. "/notes.txt", "one\ntwo\n")
     mock.respond(toolTurn("read", json.encode({ filePath = mock.root .. "/notes.txt" })))
     mock.respond(textTurn("It has two lines."))
-    init.main({}, screen)
+    init.main({ "--plain" }, screen)
 
     t.contains(screen.text, "  * read " .. mock.root .. "/notes.txt", "the tool call is logged with its argument")
     t.notContains(screen.text, "    " .. mock.root .. "/notes.txt\n", "a title that only repeats the argument is not logged twice")
@@ -529,7 +534,7 @@ return function(t, mock)
     local screen = mock.screen({ "write the file", "/exit" })
     mock.respond(toolTurn("write", json.encode({ filePath = mock.root .. "/new.txt", content = "hello" })))
     mock.respond(textTurn("Done."))
-    init.main({}, screen)
+    init.main({ "--plain" }, screen)
 
     t.contains(screen.text, "  * write " .. mock.root .. "/new.txt", "the call is logged with its path")
     t.contains(screen.text, "    Created " .. mock.root .. "/new.txt", "a title that says more than the argument is logged")
@@ -540,7 +545,7 @@ return function(t, mock)
     local screen = mock.screen({ "read a missing file", "/exit" })
     mock.respond(toolTurn("read", json.encode({ filePath = mock.root .. "/missing.txt" })))
     mock.respond(textTurn("It is not there."))
-    init.main({}, screen)
+    init.main({ "--plain" }, screen)
     t.contains(screen.text, "File not found: " .. mock.root .. "/missing.txt", "a tool error names the file")
   end
 
@@ -549,7 +554,7 @@ return function(t, mock)
     local screen = mock.screen({ "list the files", "/exit" })
     mock.respond(toolTurn("nosuchtool", "{}"))
     mock.respond(textTurn("Sorry about that."))
-    init.main({}, screen)
+    init.main({ "--plain" }, screen)
     t.contains(screen.text, "  ! Unknown tool 'nosuchtool'", "a tool error is printed with an exclamation mark")
   end
 
@@ -562,7 +567,7 @@ return function(t, mock)
         choices = { { message = { content = "hi", reasoning_content = "weighing the options" }, finish_reason = "stop" } },
       }),
     })
-    init.main({}, screen)
+    init.main({ "--plain" }, screen)
     t.contains(screen.text, "(reasoning) weighing the options", "reasoning is shown, and set apart from the answer")
   end
 
@@ -572,7 +577,7 @@ return function(t, mock)
     local path = mock.root .. "/" .. string.rep("deep/", 20) .. "file.txt"
     mock.respond(toolTurn("read", json.encode({ filePath = path })))
     mock.respond(textTurn("ok"))
-    init.main({}, screen)
+    init.main({ "--plain" }, screen)
 
     local logged = screen.text:match("  %* read ([^\n]*)")
     t.ok(logged ~= nil, "the tool call was logged")
@@ -586,7 +591,7 @@ return function(t, mock)
     local screen = mock.screen({ "no tool for this", "/exit" })
     mock.respond(toolTurn("todowrite", '{"todos":[]}'))
     mock.respond(textTurn("ok"))
-    init.main({}, screen)
+    init.main({ "--plain" }, screen)
     t.contains(screen.text, "  * todowrite", "a tool with no single obvious argument still logs something")
   end
 
@@ -696,7 +701,7 @@ return function(t, mock)
     -- multi-computer setup would show and a single-screen test never could.
     local monitor = mock.screen({ "/quit" }, { 200, 50 }, true)
     mock.attach({ monitor_1 = monitor })
-    local code = init.main({}, nil)
+    local code = init.main({ "--plain" }, nil)
 
     t.eq(code, 0, "the REPL runs with a monitor attached and no screen passed")
     t.contains(monitor.text, "/exit", "the command list made it onto the monitor")
@@ -736,6 +741,203 @@ return function(t, mock)
     _G.term = nil
     local code = init.main({ "hi" }, nil)
     t.eq(code, 1, "with nowhere to print, the program gives up rather than crashing")
+  end
+
+  -- The interface
+  --
+  -- Every other interactive test in this file passes `--plain`, because the plain
+  -- screen is what those are about. These are the ones that do not: an interactive
+  -- session with no `--plain` is the interface, and the questions worth asking about
+  -- it are the ones a plain screen cannot answer at all — whether a reply wider than
+  -- the terminal comes back whole, and whether a permission question is put in front
+  -- of the operator before it is answered.
+  --
+  -- Driving it means queueing keys, because CraftOS's keyboard belongs to the
+  -- terminal and the interface reads it from there. A turn ends on enter, and the
+  -- session ends when the queue runs out, which is what closing the program looks
+  -- like: `os.pullEvent` answers nil, and nil is the end of input.
+
+  --- An interactive session on a terminal, which is where the interface draws.
+  --
+  -- `mock.console` rather than `mock.screen`: it is `mock.console` that makes a screen
+  -- be `term`, and `env.console` — the lookup the interface uses — only ever looks at
+  -- `term`. A screen attached as a monitor is a screen the interface will not use,
+  -- which is the next test.
+  local function loadGui(argv, events)
+    local terminal = mock.console({ 51, 19 })
+    local init = assert(loadInit(nil, argv or {}, terminal))
+    if events then
+      mock.queue(unpack(events))
+    end
+    return init, terminal
+  end
+
+  do
+    -- The default, and the reason the flag exists: a computer terminal is 51 columns
+    -- wide and a reply that needs 80 of them loses the rest, so the interactive
+    -- session draws the interface unless it is told not to.
+    local init, terminal = loadGui()
+    local code = init.main({}, nil)
+
+    t.eq(code, 0, "the interactive session runs and exits zero")
+    t.ok(init.state.ui ~= nil, "an interactive session gets the interface")
+    t.contains(mock.row(terminal, 1), "opencode", "which draws a title bar")
+    t.contains(mock.row(terminal, 18), "enter sends", "and a hint line under the conversation")
+    t.contains(mock.row(terminal, 19), "> ", "and an input field under that")
+    t.notContains(terminal.text, "plain screen:", "and does not apologise for not having one")
+  end
+
+  do
+    -- The interface draws on the terminal and never on a monitor, because CraftOS's
+    -- keyboard belongs to the terminal: a field on a monitor is a field nobody can
+    -- reach, and the conversation is no use if the answer cannot be typed. So a
+    -- computer with a screen attached gets the plain screen on that screen and the
+    -- interface nowhere.
+    local monitor = mock.screen({}, { 51, 19 })
+    local init = assert(loadInit())
+    mock.attach({ monitor_1 = monitor })
+    local code = init.main({}, nil)
+
+    t.eq(code, 0, "a session with a monitor and no terminal still runs")
+    t.eq(init.state.ui, nil, "and does not put the interface on the monitor")
+    t.notContains(mock.gridText(monitor), "enter sends", "which has no hint line to show")
+    t.contains(monitor.text, "opencode for ComputerCraft", "but the plain screen is still there")
+    mock.attach({})
+  end
+
+  do
+    -- A terminal too small for a title bar and a hint line is the one reason that is
+    -- about the machine rather than the install, and the one a person can do something
+    -- about: attach a bigger screen. Which is why the reason is said out loud.
+    local terminal = mock.console({ 12, 5 })
+    local init = assert(loadInit(nil, {}, terminal))
+    local code = init.main({}, nil)
+
+    t.eq(code, 0, "a terminal too small for the interface still gives a session")
+    t.eq(init.state.ui, nil, "with the plain screen in its place")
+    -- The reason is wrapped at the terminal's own width, which is the point of it being
+    -- on a screen at all: a 12-column terminal cannot hold the sentence whole.
+    t.contains(terminal.text, "screen:", "and says which reason it was")
+    t.contains(terminal.text, "too small", "and what the reason is")
+  end
+
+  do
+    -- `--plain` is the escape hatch, and it is the screen this program had before the
+    -- interface: prints, wraps, and nothing drawn. It is also asked for by name, so it
+    -- gets no reason — an apology for a screen you asked for is not a reason.
+    local terminal = mock.console({ 51, 19 })
+    local init = assert(loadInit(nil, {}, terminal))
+    local code = init.main({ "--plain" }, nil)
+
+    t.eq(code, 0, "--plain runs the same session")
+    t.eq(init.state.ui, nil, "and builds no interface")
+    t.notContains(terminal.text, "plain screen:", "and gives no reason for not having one")
+    t.contains(terminal.text, "opencode for ComputerCraft", "but the banner is the one it always was")
+  end
+
+  do
+    -- A one-shot's output is whatever is on the terminal when the program exits, and a
+    -- screen that clears itself and keeps a scrollback nobody can reach once the
+    -- program has gone is a worse answer to `opencode "what is 2 + 2"` than printed
+    -- text. So the question form deliberately keeps the plain screen.
+    local terminal = mock.console({ 51, 19 })
+    local init = assert(loadInit(nil, { "what is 2 + 2" }, terminal))
+    mock.respond(textTurn("4"))
+    local code = init.main({ "what is 2 + 2" }, nil)
+
+    t.eq(code, 0, "a one-shot still answers")
+    t.eq(init.state.ui, nil, "and still builds no interface")
+    t.contains(terminal.text, "4", "with the answer on the screen it leaves behind")
+    t.notContains(mock.gridText(terminal), "enter sends", "and no hint line to go with it")
+  end
+
+  do
+    -- `--help` lists the escape hatch, because the person who needs it is the one
+    -- staring at a screen that will not fit their terminal.
+    local terminal = mock.console({ 51, 19 })
+    local init = assert(loadInit(nil, { "--help" }, terminal))
+    local code = init.main({ "--help" }, nil)
+
+    t.eq(code, 0, "--help exits zero")
+    t.contains(terminal.text, "--plain", "and lists the plain screen")
+    -- Wrapped at the terminal's own width, like everything else on it.
+    t.contains(terminal.text, "no GUI,", "with what it is for")
+  end
+
+  do
+    -- The complaint the interface exists for. A reply of long paths, no spaces to break
+    -- at, on a 51-column terminal: the plain screen threw away everything past the
+    -- right edge, and the interface has to bring the whole of it back.
+    local terminal = mock.console({ 51, 19 })
+    local init = assert(loadInit(nil, {}, terminal))
+    local paths = {}
+    for i = 1, 6 do
+      paths[i] = "/rom/modules/" .. string.rep("nested_", 4) .. i .. ".lua"
+    end
+    mock.respond(textTurn("These are the files:\n" .. table.concat(paths, "\n")))
+    mock.queue({ "char", "l" }, { "char", "i" }, { "char", "s" }, { "char", "t" }, { "key", 28 })
+    local code = init.main({}, nil)
+
+    t.eq(code, 0, "a turn in the interface is answered")
+    t.eq(terminal.outside, 0, "with nothing drawn outside the screen")
+    for _, path in ipairs(paths) do
+      t.contains(mock.gridText(terminal), path, "every path in the answer is on the screen: " .. path)
+    end
+  end
+
+  do
+    -- A tool call is a line in the log, and the log is grey while the answer is white.
+    -- Both have to survive the width, and the log has to be there at all.
+    local terminal = mock.console({ 51, 19 })
+    local init = assert(loadInit(nil, {}, terminal))
+    mock.respond(toolTurn("read", json.encode({ filePath = mock.root .. "/notes.txt" })))
+    mock.respond(textTurn("It has two lines."))
+    mock.queue({ "char", "r" }, { "char", "e" }, { "char", "a" }, { "char", "d" }, { "key", 28 })
+    local code = init.main({}, nil)
+
+    t.eq(code, 0, "a turn that calls a tool is answered")
+    t.contains(mock.gridText(terminal), "notes.txt", "and the tool is in the log")
+    t.contains(mock.gridText(terminal), "It has two lines.", "and the answer after it")
+  end
+
+  do
+    -- The permission question used to be written to a screen and the answer typed at
+    -- the terminal, which on a computer with a monitor is a question nobody read. In
+    -- the interface the question is a dialog and the answer is typed into the field
+    -- under it, so the two are in front of the operator at the same time.
+    local terminal = mock.console({ 51, 19 })
+    local init = assert(loadInit(nil, {}, terminal))
+    writeConfig({
+      model = "ollama/llama3",
+      permission = { { permission = "read", pattern = "*", action = "ask" } },
+    })
+    mock.respond(toolTurn("read", json.encode({ filePath = mock.root .. "/notes.txt" })))
+    mock.respond(textTurn("I did not read it."))
+    mock.queue({ "char", "r" }, { "char", "e" }, { "char", "a" }, { "char", "d" }, { "key", 28 })
+    mock.queue({ "char", "n" }, { "key", 28 })
+    local code = init.main({}, nil)
+
+    t.eq(code, 0, "a question that has to be asked is asked")
+    -- Somewhere in the run, which is the only thing that does not depend on how the
+    -- operator got to the answer: a dialog that was drawn and taken off again is not
+    -- on the last frame, and which frame it is on depends on the keys in between.
+    t.ok(mock.frameContaining(terminal, "Permission: read") ~= nil, "and names what is being asked")
+    t.ok(mock.frameContaining(terminal, "notes.txt") ~= nil, "and what it is being asked about")
+    t.contains(terminal.text, "Permission denied", "and refusing it goes through")
+  end
+
+  do
+    -- The buttons on the hint line are the one part of this screen you can press, and
+    -- clicking one answers with the command it stands for — so there is one
+    -- implementation of `/help` rather than two.
+    local terminal = mock.console({ 51, 19 })
+    local init = assert(loadInit(nil, {}, terminal))
+    mock.queue({ "mouse_click", 1, 40, 18 })
+    local code = init.main({}, nil)
+
+    t.eq(code, 0, "a click on the hint line is answered")
+    t.contains(mock.gridText(terminal), "Commands:", "with the help the button stands for")
+    t.contains(mock.gridText(terminal), "/exit", "and every command in it")
   end
 
   -- Starting itself.
