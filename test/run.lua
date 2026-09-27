@@ -89,7 +89,7 @@ function M.run(filter)
   mock.install()
   mock.setup()
 
-  local suites = { "json", "util", "pattern", "provider", "http", "llm", "truncate", "tools", "agent", "cli" }
+  local suites = { "json", "util", "pattern", "provider", "http", "llm", "truncate", "tools", "agent", "cli", "install" }
   local missing = {}
   for _, name in ipairs(suites) do
     if not filter or name:find(filter, 1, true) then

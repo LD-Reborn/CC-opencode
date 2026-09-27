@@ -96,6 +96,38 @@ return function(t, mock)
   t.contains(message, "https://api.x.com/v1/chat/completions", "an unreachable host names the url")
   t.eq(countRequests() - before, http.MAX_ATTEMPTS, "a transport failure is retried")
 
+  -- A host the server's allowlist refuses is not a transport failure: the
+  -- answer cannot change, and the fix is a config file rather than a retry.
+
+  do
+    for _, reason in ipairs({ "Domain not permitted", "domain is not permitted", "Error: Domain Not Permitted: x" }) do
+      mock.setup()
+      before = countRequests()
+      mock.failWith(reason)
+      local blocked, blockedMessage = http.request("https://forge.example/raw/main/init.lua")
+      t.eq(blocked, nil, "a refused host is an error: " .. reason)
+      t.eq(countRequests() - before, 1, "and is not retried: " .. reason)
+      t.contains(blockedMessage, "allowlist", "it says the allowlist is the problem: " .. reason)
+      t.contains(blockedMessage, "forge.example", "it names the host: " .. reason)
+      t.contains(blockedMessage, "computercraft-server.toml", "and the file to edit: " .. reason)
+      t.contains(blockedMessage, "$private", "and the rule that refuses a host on a lan: " .. reason)
+    end
+  end
+
+  do
+    -- A transport failure that merely mentions a domain is still retried; the
+    -- match is on the refusal, not on the word.
+    mock.setup()
+    before = countRequests()
+    mock.failWith("connection refused: could not reach host")
+    mock.failWith("connection refused: could not reach host")
+    mock.failWith("connection refused: could not reach host")
+    local response, message = http.request("https://api.x.com/v1/chat/completions")
+    t.eq(response, nil, "an unreachable host is still an error")
+    t.contains(message, "could not reach", "and still says so")
+    t.eq(countRequests() - before, http.MAX_ATTEMPTS, "and is still retried")
+  end
+
   -- A cap on the response size keeps a runaway body out of memory.
 
   mock.setup()

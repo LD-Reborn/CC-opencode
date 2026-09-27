@@ -20,42 +20,134 @@ Written. Run it with `shell.run("hello")`.
 
 ## Install
 
-### The single file
+ComputerCraft has no package manager and no way to clone a repository, so getting
+the code onto a computer means fetching it over http. Two things make that a
+one-liner rather than a chore.
 
-The bundle is the easy way in. Copy `dist/opencode.lua` to your computer as
-`/opencode` (no `.lua`) and run it:
+Before either route works, the host has to be on the server's http allowlist —
+see [What it needs](#what-it-needs). Every fetch below fails with
+`Domain not permitted` until you have done that.
+
+### From your own remote
+
+`dist/install.lua` is a ComputerCraft program that downloads the repository into
+the computer, file by file. It knows the file list, the expected size of each
+file, and the remote and branch it was built from.
+
+Get it onto the computer the same way you would any other file, then run it:
 
 ```
-pastebin <url> opencode
+wget https://raw.githubusercontent.com/LD-Reborn/CC-opencode/main/dist/install.lua install
+install
+```
+
+```
+install                       the modular tree, into the current directory
+install --bundle              dist/opencode.lua alone, as opencode.lua
+install <url>                 from somewhere else
+```
+
+Where the raw files live is a property of the host, not of git: GitHub uses
+`raw.githubusercontent.com`, GitLab puts `-/raw` in the path, and Gitea and its
+forks use `raw/branch`. Rather than guess, the installer tries the known shapes
+and keeps the first that returns a file of the expected length — which is what
+tells a file apart from a login page, since both answer 200. It costs one wasted
+request on the shapes that do not apply, and it means a fork on a self-hosted
+forge works without being told which forge it is.
+
+That length check doubles as a staleness check. If a file on the remote is not
+the one the installer was generated from — a commit behind, say — the sizes
+differ, and it says so rather than writing the older file over the newer one.
+
+If the repository is private, or the host is one this list does not cover, pass
+the base url yourself and skip the guessing:
+
+```
+install https://raw.githubusercontent.com/LD-Reborn/CC-opencode/main/
+```
+
+`dist/install.lua` is generated, not written by hand. Re-run it after adding a
+module so the file list stays right, and copy the new file over. The committed
+one is generated with `--repo`, so it sends everyone who downloads it to this
+repository rather than to whichever remote it was built from:
+
+```
+lua install.lua --repo https://github.com/LD-Reborn/CC-opencode
+```
+
+### The single file
+
+`dist/opencode.lua` is the whole program in one 160 KB file, with the library
+inlined. Nothing to keep in sync, and it is the better choice on a small disk:
+
+```
+wget https://raw.githubusercontent.com/LD-Reborn/CC-opencode/main/dist/opencode.lua opencode
 opencode
 ```
 
-`/opencode` can live anywhere; it finds its own directory to look for
+`wget` takes the url and then the name to save under. `pastebin <url> opencode`
+does the same thing and is the older habit, but it is not restricted to
+pastebin.com — it fetches whatever url you give it, so it is subject to the same
+allowlist as everything else here.
+
+`opencode` can live anywhere; it finds its own directory to look for
 `opencode.json`, and the config search is relative to it. Keeping it at the
 filesystem root means `opencode.json` next to it and the shell's working
 directory are the same place.
 
 ### The modular checkout
 
-For reading, hacking on, or updating the source, copy the directory instead:
+For reading, hacking on, or updating the source, install the tree instead. It is
+the same program in 23 files:
 
 ```
-opencode/            the program: init.lua
-src/                 the library: one module per concern
-build.lua            the bundler (not needed on the computer)
-test/                the test suite (not needed on the computer)
+init.lua              the entry point
+src/                  the library: one module per concern
 ```
 
 `init.lua` adds its own directory to `package.path` at startup, so
-`/opencode/init.lua` plus `/opencode/src/` works with no arguments and no
-`package.path` editing. `dist/opencode.lua` and this checkout are the same
-program; the bundle just inlines the library.
+`/init.lua` plus `/src/` works with no arguments and no `package.path` editing,
+and you can read the source on the computer. `install` prints the command to run
+when it finishes.
+
+Re-running `install` is how you update: every file is written again, so a pull
+on your side and an `install` on the computer is the whole cycle.
 
 ### What it needs
 
-ComputerCraft:Tweaked with `http` enabled (`/setmod http true` in a Turtle or
-Computer, or the server config). Nothing else: no `cc-tweaked` modules, no
-`os.getenv`, no `io`. Lua 5.1 only — the source uses no 5.2+ syntax.
+Two gates, and they are separate.
+
+**On the computer**, the http mod has to be on: `/setmod http true`, or the
+peripheral in the server config.
+
+**On the server**, the host has to be on the http allowlist, or every request is
+refused with `Domain not permitted`. There is no implicit allow, so this is the
+step people miss. In `serverconfig/computercraft-server.toml` inside the world
+folder, on CC:Tweaked 1.87.0 and later:
+
+```toml
+[[http.rules]]
+    host = "raw.githubusercontent.com"
+    action = "allow"
+    max_upload = 4194304
+    max_download = 16777216
+    timeout = 30000
+```
+
+Rules match the host in the url, not the repository, so this is
+`raw.githubusercontent.com` for the downloads above — not `github.com`. Add an
+entry for your model provider's host as well, or every call to the model fails
+the same way.
+
+Two traps in that file. Rules are matched in order, and the default config also
+carries a deny for `$private`, so a host that resolves to a LAN address is
+refused by address whatever its name is — delete the `action = "deny"` block if
+you install from a forge on your own network. And on 1.86.2 and earlier this is
+a `blacklist = []` array in `computercraft-common.toml` instead, where an empty
+array means everything on the whitelist is reachable.
+
+Nothing else: no `cc-tweaked` modules, no `os.getenv`, no `io`. Lua 5.1 only —
+the source uses no 5.2+ syntax.
 
 ## Configure
 
@@ -292,6 +384,10 @@ This is a port, and the port is not cosmetic. The things that differ:
   afterwards, so the text appears all at once. It is off by default.
 - **No process environment.** `os.getenv` does not exist. Keys come from
   `opencode.json`.
+- **Every request is vetted by the server first.** The host has to be on the
+  http allowlist, and there is no implicit allow. A refused host is reported with
+  the config file to edit rather than retried, since a missing config line is not
+  something a second attempt would fix.
 - **The whole conversation is resent every turn.** Long sessions would grow
   without bound, so `compaction` replaces the older messages with a summary once
   the conversation approaches the model's context limit, keeping the turn in
@@ -315,7 +411,7 @@ no Minecraft client is involved.
 ```
 lua test/run.lua            # everything
 lua test/run.lua agent      # one suite: json util pattern provider http llm
-                           # truncate tools agent cli
+                           # truncate tools agent cli install
 ```
 
 ```
@@ -324,16 +420,27 @@ lua build.lua --out /tmp/o.lua
 lua build.lua --test        # build, then run the bundle against the mock
 ```
 
+```
+lua install.lua             # writes dist/install.lua
+lua install.lua --url <base url>
+```
+
 `build.lua` derives the module order from the require graph, refuses to emit a
 bundle with an unresolved `require`, checks that the output parses, and with
 `--test` runs the generated bundle in a fresh process where the only source of
 modules is the bundle itself. `CCOPENCODE_DEBUG_BUNDLE=<path>` writes the
 generated source there instead of running it.
 
+`install.lua` writes the ComputerCraft-side installer: the file list, each file's
+size, and the remote and branch from git. It checks that the result parses. The
+generated program is covered by `lua test/run.lua install`, which runs it
+against the mock and rewrites the baked-in repository to check each host shape.
+
 Layout:
 
 ```
 init.lua                  argument parsing, the REPL, rendering
+install.lua               the generator for dist/install.lua
 src/
   environment.lua         the only module that touches fs/shell/http/term
   json.lua                encode and decode, with a distinct null

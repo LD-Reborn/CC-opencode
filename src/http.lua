@@ -37,6 +37,34 @@ local function readHandle(handle, maxBytes)
   return body:sub(1, maxBytes)
 end
 
+--- Whether a thrown error is the server refusing the host outright.
+--
+-- ComputerCraft keeps an allowlist of hosts a computer may reach, and a host
+-- that is not on it is refused before any request is made. That is a different
+-- kind of failure from a network fault: it is not transient, it is not the
+-- caller's doing, and no amount of retrying will change the answer. The wording
+-- has changed between CC versions, so both parts are matched rather than the
+-- whole phrase.
+local function isBlockedHost(reason)
+  local lower = tostring(reason):lower()
+  return lower:find("domain", 1, true) ~= nil and lower:find("not permitted", 1, true) ~= nil
+end
+
+--- What to tell someone whose host is not on the allowlist.
+--
+-- The bare CC error names the symptom and nothing else, and the thing that has
+-- to change is a config file on the server rather than anything the caller can
+-- do, so naming the file is the difference between a fixable problem and a
+-- mysterious one.
+local function blockedMessage(url)
+  local host = url:match("^https?://([^/]+)") or url
+  return "the server's http allowlist does not permit " .. host
+    .. "\n  it needs an entry in serverconfig/computercraft-server.toml, as"
+    .. "\n  [[http.rules]] with host = \"" .. host .. "\" and action = \"allow\","
+    .. "\n  then a server restart. A host on your own network is refused by the"
+    .. "\n  default $private deny rule whatever its name, so check that too."
+end
+
 --- Case-insensitive header lookup; CC normalises header names but not reliably.
 local function lookup(headers, name)
   if not headers then
@@ -101,6 +129,11 @@ function M.request(url, options)
         util.sleep(backoff(attempt, headers))
       end
     else
+      if isBlockedHost(handle) then
+        -- Fail now rather than twice more: the answer cannot change, and the
+        -- backoff would turn a missing config line into a ten second wait.
+        return nil, blockedMessage(url)
+      end
       lastError = "could not reach " .. url .. " (" .. tostring(handle) .. ")"
       if attempt < attempts then
         util.sleep(backoff(attempt, nil))
