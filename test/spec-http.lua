@@ -205,30 +205,102 @@ return function(t, mock)
   http.postJson("https://api.x.com/v1/chat/completions", nil, { raw = '{"already":"encoded"}' })
   t.eq(lastRequest().body, '{"already":"encoded"}', "a raw body bypasses the encoder")
 
-  -- The argument shape, which is not a style choice.
+  -- Which function to call, and with what. Neither is a style choice, and each
+  -- reads as though the other one were meant.
   --
-  -- CC picks its form from the type of the *first* argument. Given a string it
-  -- takes the legacy positional signature, where argument 2 is the POST body; a
-  -- table there is refused with "bad argument #2 (string expected, got table)"
-  -- and the request never leaves the computer. So `http.request(url, { method =
-  -- ... })` fails on real hardware while passing any mock that does not check its
-  -- arguments, which is exactly what this one used to be — so a program that
-  -- could not make a single request had a green suite.
+  -- `http.request` is asynchronous. It starts the request, returns immediately,
+  -- and delivers the response later as an `http_success` event; its own source
+  -- calls the return value "for legacy reasons" and undocumented. It is a
+  -- boolean, so `handle.getResponseCode()` raises "attempt to index local
+  -- 'handle' (a boolean value)" and nothing is ever fetched. `http.get` and
+  -- `http.post` are the synchronous wrappers around that identical call, and
+  -- that wrapper is the whole difference.
   --
-  -- These call CC's entry point rather than the library's: the library pcalls and
-  -- retries, so going through it would report the refusal three times over and
-  -- quietly eat the queued responses the rest of this spec depends on.
+  -- Every form dispatches on the type of its *first* argument. A string puts it
+  -- in the legacy positional signature, where argument 2 is the body and must be
+  -- a string, so `http.request(url, { method = "GET" })` is refused with "bad
+  -- argument #2 (string expected, got table)".
+  --
+  -- The mock used to accept any of this and hand back a handle regardless, so a
+  -- program that could not make a single request on a computer had a green suite.
+  -- It reproduces both refusals now, and these assertions are what keep it
+  -- honest: relax the mock again and they fail, rather than the program quietly
+  -- breaking on hardware.
+  --
+  -- They call CC's entry point rather than the library's, because the library
+  -- pcalls and retries -- going through it would report a refusal three times
+  -- over and quietly eat the queued responses the rest of this spec depends on.
+
+  -- A 4xx arrives as the third return value, not as an error string.
+  --
+  -- `http.get` answers `nil, message`, and behind them the failing response
+  -- whenever the server said anything at all. On a computer that message is a bare
+  -- reason phrase -- "Too Many Requests" -- so the status has to be read off the
+  -- response instead. Read the message and a provider error loses both its code
+  -- and the body carrying the explanation, which is the one thing worth showing.
+
+  do
+    mock.respond({ status = 429, headers = { ["retry-after"] = "7" }, body = '{"error":{"message":"slow down"}}' })
+    local response = http.request("https://api.x.com/v1/chat/completions", { attempts = 1 })
+    t.ok(response, "a 429 is a response, not a failure")
+    t.eq(response.status, 429, "whose status comes off the response handle")
+    t.eq(response.headers["retry-after"], "7", "carrying the header a backoff needs")
+    t.eq(http.errorMessage(response), "HTTP 429: slow down", "so the message is the provider's, not a reason phrase")
+  end
+
+  -- A throw is our bug, not the network's.
+  --
+  -- `pcall` is here for CC checking the table it was handed, and everything it
+  -- checks is ours: the method, the timeout's type, the url. Retrying that three
+  -- times would spend three requests to learn the same thing, so it is reported
+  -- as what it is rather than dressed up as a network fault.
+
+  do
+    mock.setup()
+    local before = countRequests()
+    local bad, why = http.request("https://api.x.com/v1/chat/completions", { method = "GET WITH SPACES" })
+    t.eq(bad, nil, "a method CC will not accept is an error")
+    t.contains(why, "internal error", "reported as a bug in the request")
+    t.contains(why, "Invalid HTTP method", "keeping CC's own complaint")
+    t.notContains(why, "could not reach", "and not claiming the host was at fault")
+    t.eq(countRequests() - before, 0, "and no request was made at all, let alone three")
+  end
 
   mock.setup()
-  local refused, refusal = pcall(_G.http.request, "https://api.x.com/v1/chat/completions", { method = "GET" })
-  t.ok(not refused, "a url followed by an options table is refused, as CC refuses it")
-  t.contains(tostring(refusal), "bad argument #2", "with the same complaint CC makes")
-  t.contains(tostring(refusal), "string expected, got table", "and the same wording")
-  t.eq(countRequests(), 0, "and the request is not recorded, having never been made")
 
-  local handle = _G.http.request({ url = "https://api.x.com/v1/chat/completions", method = "GET", timeout = 5 })
-  t.ok(handle, "a url inside the options table is what CC wants")
-  handle.close()
-  t.eq(lastRequest().url, "https://api.x.com/v1/chat/completions", "and the url is read out of it")
-  t.eq(lastRequest().timeout, 5, "with the timeout alongside")
+  do
+    local started = _G.http.request({ url = "https://api.x.com/v1/chat/completions", method = "GET" })
+    t.eq(type(started), "boolean", "http.request answers with a boolean, being asynchronous")
+    t.eq(started, true, "true, meaning the request was started rather than finished")
+  end
+
+  do
+    local refused, refusal = pcall(_G.http.request, "https://api.x.com/v1/chat/completions", { method = "GET" })
+    t.ok(not refused, "a url followed by an options table is refused, as CC refuses it")
+    t.contains(tostring(refusal), "bad argument #2", "with the same complaint CC makes")
+    t.contains(tostring(refusal), "string expected, got table", "and the same wording")
+  end
+
+  do
+    local handle = _G.http.get({ url = "https://api.x.com/v1/chat/completions", method = "GET", timeout = 5 })
+    t.eq(type(handle), "table", "http.get answers with a response")
+    t.eq(handle.getResponseCode(), 200, "which is readable")
+    handle.close()
+    t.eq(lastRequest().url, "https://api.x.com/v1/chat/completions", "the url comes out of the table")
+    t.eq(lastRequest().timeout, 5, "with the timeout alongside")
+  end
+
+  do
+    -- `get` refuses a body and `post` allows one, which is why the library picks
+    -- its entry point from the presence of a body rather than from the method.
+    local refused, refusal = pcall(_G.http.get, { url = "https://api.x.com/", body = "{}" })
+    t.ok(not refused, "http.get refuses a body")
+    t.contains(tostring(refusal), "bad field 'body'", "by naming the field")
+
+    local handle = _G.http.post({ url = "https://api.x.com/", method = "GET", body = "{}", timeout = 5 })
+    t.ok(handle, "http.post accepts one")
+    handle.close()
+    t.eq(lastRequest().body, "{}", "and sends it")
+    t.eq(lastRequest().method, "GET", "with the method taken from the table, not the function name")
+  end
 end

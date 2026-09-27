@@ -115,10 +115,17 @@ on your side and an `install` on the computer is the whole cycle.
 
 ### What it needs
 
-Two gates, and they are separate.
+Three gates, and they are separate.
 
 **On the computer**, the http mod has to be on: `/setmod http true`, or the
 peripheral in the server config.
+
+**The version matters more than it looks.** Every request goes through the options
+form of `http.get`/`http.post`, which arrived in CC:Tweaked 1.80pr1.6, and carries
+a `timeout`, which needs 1.105.0. Below 1.105 the request still goes out — the
+key is simply ignored by the older socket layer — so nothing breaks outright, but
+a request has no time limit of its own. Anything from 1.105.0 on is what this is
+written against.
 
 **On the server**, the host has to be on the http allowlist, or every request is
 refused with `Domain not permitted`. There is no implicit allow, so this is the
@@ -404,9 +411,31 @@ This is a port, and the port is not cosmetic. The things that differ:
 - **The shell is CC's shell.** It has pipes, `>`, `&`, and `;`. It does not have
   `&&`, `||`, `$VAR`, `~`, or glob expansion. `bash` is named after opencode's
   tool; the prompt says so explicitly, so the model does not keep trying `&&`.
-- **Streaming is a lie, mostly.** `http.request` reads the whole body before
-  returning. `--stream` sends `stream: true` and reassembles the SSE frames
-  afterwards, so the text appears all at once. It is off by default.
+- **Streaming is a lie, mostly.** The response handle only exists once the whole
+  body has arrived, so there is nothing to hand on as it comes in. `--stream`
+  sends `stream: true` and reassembles the SSE frames afterwards, so the text
+  appears all at once. It is off by default.
+- **`http.request` is asynchronous, and `http.get`/`http.post` are not.** This
+  is the one that reads as a typo and is not. `http.request` starts the request,
+  returns immediately, and delivers the response later as an `http_success` event;
+  its own source calls the return value "for legacy reasons" and undocumented. It
+  is a **boolean**, so reading a response out of it raises `attempt to index
+  local 'handle' (a boolean value)` and nothing is ever fetched. The synchronous
+  pair wraps that identical call in an `os.pullEvent` loop, and that loop is the
+  whole difference. All three also dispatch on the type of their first argument: a
+  table is the options form with the url inside it, a string is the legacy
+  positional signature where argument 2 is the body — so `http.request(url, {
+  method = "GET" })` is refused with `bad argument #2 (string expected, got
+  table)`. Both failures happen on the first request, name neither the url nor
+  the request, and appear only on real hardware. The mock reproduces both, so the
+  suite catches them.
+- **A failed request is a return value, not an exception.** `http.get` answers
+  `nil, message`, and behind them the failing response whenever the server said
+  anything at all. The message is a bare reason phrase, so the status has to come
+  off the response — that third value is the only place a provider's own error
+  text and a `Retry-After` header live. `pcall` is for CC validating the request
+  table, which is our bug rather than the network's, and is neither retried nor
+  reported as an unreachable host.
 - **No process environment.** `os.getenv` does not exist. Keys come from
   `opencode.json`.
 - **Every request is vetted by the server first.** The host has to be on the
@@ -422,12 +451,6 @@ This is a port, and the port is not cosmetic. The things that differ:
 - **Memory is small.** A context window of 128 KB is already a large session by
   ComputerCraft standards. `compaction.reserved` exists to leave room for the
   reply.
-- **`http.request` dispatches on its first argument's type.** A table means the
-  options form, with the url *inside* it. A string means the legacy positional
-  signature, where argument 2 is the POST body — so `http.request(url, { method =
-  "GET" })` is refused with `bad argument #2 (string expected, got table)` and
-  the request never leaves the computer. It reads as correct, and it fails only on
-  real hardware. The mock raises on that shape, so the test suite catches it.
 - **No regex, no `loadstring`, no `io`.** Hence `pattern.lua` and the bundled
   loader, which wraps each module as a function body and installs it through
   `package.preload`.

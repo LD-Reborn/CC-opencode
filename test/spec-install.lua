@@ -53,6 +53,17 @@ return function(t, mock)
   --
   -- The installer returns a status instead of calling `os.exit`, which
   -- ComputerCraft does not have, so the return value is the status.
+  --- The url of the nth request, or a note that it never happened.
+  --
+  -- Reaching into `mock.requests[n].url` directly aborts the entire run on a nil,
+  -- which buries the assertion that was about to say what went wrong. That is not
+  -- hypothetical: it is what a broken installer did here, twice, while the real
+  -- complaint was still queued up to be printed.
+  local function requested(n)
+    local entry = mock.requests[n]
+    return entry and entry.url or ("(request " .. n .. " was never made)")
+  end
+
   local function installer(args, responses, repo, branch, failure)
     mock.setup()
     local path = installerPath
@@ -144,24 +155,38 @@ return function(t, mock)
 
   -- The installer asks for http the documented way.
   --
-  -- `http.request(url, { method = "GET" })` looks reasonable and cannot work: CC
-  -- dispatches on the type of the first argument, so a table in second place is
-  -- the legacy signature's POST body and is refused with "bad argument #2
-  -- (string expected, got table)". The installer then fails on its very first
-  -- file, before writing anything, with an error that names neither the url nor
-  -- the request. The mock now raises on that shape, so this is checked by
-  -- behaviour as well as by reading the source.
+  -- Two things go wrong here, and both of them happen on the very first file,
+  -- before anything is written, with an error that names neither the url nor the
+  -- request:
+  --
+  --   `http.request` is asynchronous. It starts the request, returns immediately,
+  --   and delivers the response later as an `http_success` event; its own source
+  --   calls the return value "for legacy reasons" and undocumented. Reading a
+  --   response out of a boolean raises "attempt to index local 'handle' (a boolean
+  --   value)". `http.get` is the synchronous wrapper around the same call.
+  --
+  --   All three forms dispatch on the type of the first argument. A string puts
+  --   them in the legacy positional signature, where argument 2 is the body and
+  --   must be a string, so `http.request(url, { method = "GET" })` is refused with
+  --   "bad argument #2 (string expected, got table)".
+  --
+  -- The mock reproduces both now, so the shape is checked by behaviour as well as
+  -- by reading the source.
 
   do
     local source = env.read(installerPath)
-    t.contains(source, "http.request, { url = url", "the url goes inside the request table")
-    t.notContains(source, "http.request, url, {", "and never as a second argument")
+    t.contains(source, "pcall(http.get, { url = url", "it uses the synchronous entry point")
+    -- Matched as calls, not as text: the comment above explains at some length
+    -- why `http.request` is the wrong one, and it should keep doing so.
+    t.notContains(source, "http.request(", "and never calls the asynchronous one")
+    t.notContains(source, "pcall(http.request", "which would return a boolean")
+    t.notContains(source, "http.request, url, {", "nor the legacy positional form")
   end
 
   do
     local code = installer({ "https://raw.example/main/" }, queue({}, t.root, paths))
     t.eq(code, 0, "and a real install still works through the mock, which enforces the shape")
-    t.eq(mock.requests[1].url, "https://raw.example/main/init.lua", "reaching the first file")
+    t.eq(requested(1), "https://raw.example/main/init.lua", "reaching the first file")
   end
 
   -- The repository and branch baked in by `install.lua`.
@@ -188,12 +213,12 @@ return function(t, mock)
     }, t.root, paths), repo, "main")
 
     t.eq(code, 0, "a candidate that answers 200 with the right bytes is taken")
-    t.eq(mock.requests[1].url, repo .. "/raw/branch/main/init.lua", "a 404 is skipped")
-    t.eq(mock.requests[2].url, repo .. "/-/raw/main/init.lua", "so is a page, however convincing")
-    t.eq(mock.requests[3].url, repo .. "/raw/main/init.lua", "and so is a page that admits it is one")
-    t.eq(mock.requests[4].url, repo .. "/branch/main/init.lua", "the last candidate is tried too")
-    t.eq(mock.requests[5].url, repo .. "/branch/main/init.lua", "and the install carries on from the one that worked")
-    t.eq(mock.requests[27].url, repo .. "/branch/main/src/util.lua", "through the whole tree")
+    t.eq(requested(1), repo .. "/raw/branch/main/init.lua", "a 404 is skipped")
+    t.eq(requested(2), repo .. "/-/raw/main/init.lua", "so is a page, however convincing")
+    t.eq(requested(3), repo .. "/raw/main/init.lua", "and so is a page that admits it is one")
+    t.eq(requested(4), repo .. "/branch/main/init.lua", "the last candidate is tried too")
+    t.eq(requested(5), repo .. "/branch/main/init.lua", "and the install carries on from the one that worked")
+    t.eq(requested(27), repo .. "/branch/main/src/util.lua", "through the whole tree")
     t.ok(env.exists(mock.root .. "/init.lua"), "writing the files it found")
   end
 
@@ -216,7 +241,7 @@ return function(t, mock)
     local code = installer({}, { { status = 404, body = "" } }, "https://github.com/owner/name", "main")
     t.eq(code, 2, "a GitHub repository that cannot be reached still gives up")
     t.eq(
-      mock.requests[1].url,
+      requested(1),
       "https://raw.githubusercontent.com/owner/name/main/init.lua",
       "and is asked on its raw host first"
     )
@@ -225,9 +250,9 @@ return function(t, mock)
   do
     local code = installer({ "--bundle" }, found({ paths[#paths] }), "https://git.example/owner/name", "main")
     t.eq(code, 0, "--bundle probes with the bundle, not with the tree")
-    t.eq(mock.requests[1].url, "https://git.example/owner/name/raw/branch/main/dist/opencode.lua",
+    t.eq(requested(1), "https://git.example/owner/name/raw/branch/main/dist/opencode.lua",
       "so a host that serves the tree but not the bundle is still found")
-    t.eq(mock.requests[2].url, "https://git.example/owner/name/raw/branch/main/dist/opencode.lua",
+    t.eq(requested(2), "https://git.example/owner/name/raw/branch/main/dist/opencode.lua",
       "and the winning candidate is then used for the real download")
     t.eq(#mock.requests, 2, "which costs one extra request")
   end
@@ -244,8 +269,8 @@ return function(t, mock)
     local code = installer({ "https://raw.example/main/" }, queue(nil, t.root, paths))
     t.eq(code, 0, "installing from a url succeeds")
     t.eq(#mock.requests, 23, "one request per library file, and not for the bundle")
-    t.eq(mock.requests[1].url, "https://raw.example/main/init.lua", "the first file is the entry point")
-    t.eq(mock.requests[23].url, "https://raw.example/main/src/util.lua", "the last is the last library file")
+    t.eq(requested(1), "https://raw.example/main/init.lua", "the first file is the entry point")
+    t.eq(requested(23), "https://raw.example/main/src/util.lua", "the last is the last library file")
     t.ok(env.exists(mock.root .. "/init.lua"), "init.lua was written")
     t.ok(env.exists(mock.root .. "/src/agent.lua"), "a nested module went into a directory that did not exist")
     t.ok(env.exists(mock.root .. "/src/tool/registry.lua"), "and so did the second level")
@@ -262,7 +287,7 @@ return function(t, mock)
   do
     local code = installer({ "https://raw.example/main" }, queue(nil, t.root, paths))
     t.eq(code, 0, "a base url without a trailing slash is accepted")
-    t.eq(mock.requests[1].url, "https://raw.example/main/init.lua", "and does not produce a doubled slash")
+    t.eq(requested(1), "https://raw.example/main/init.lua", "and does not produce a doubled slash")
   end
 
   -- The bundle on its own.
@@ -274,7 +299,7 @@ return function(t, mock)
     )
     t.eq(code, 0, "--bundle installs one file")
     t.eq(#mock.requests, 1, "and asks for it once")
-    t.eq(mock.requests[1].url, "https://raw.example/main/dist/opencode.lua", "at its path in the repository")
+    t.eq(requested(1), "https://raw.example/main/dist/opencode.lua", "at its path in the repository")
     t.ok(env.exists(mock.root .. "/opencode.lua"), "written under the name the program is run by")
     t.eq(
       env.read(mock.root .. "/opencode.lua"),
@@ -338,8 +363,8 @@ return function(t, mock)
     local code = installer({}, nil, "https://github.com/owner/name", "main", "Domain not permitted")
     t.eq(code, 2, "a GitHub repository whose raw host is refused still gives up")
     t.eq(#mock.requests, 5, "having asked the repository's own host under all four of its shapes")
-    t.eq(mock.requests[1].url, "https://raw.githubusercontent.com/owner/name/main/init.lua", "the refused one first")
-    t.eq(mock.requests[2].url, "https://github.com/owner/name/raw/branch/main/init.lua", "and then the rest")
+    t.eq(requested(1), "https://raw.githubusercontent.com/owner/name/main/init.lua", "the refused one first")
+    t.eq(requested(2), "https://github.com/owner/name/raw/branch/main/init.lua", "and then the rest")
   end
 
   do

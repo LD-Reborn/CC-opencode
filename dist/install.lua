@@ -22,7 +22,7 @@ local FILES = {
   { "src/agent.lua", 13912, "src/agent.lua" },
   { "src/config.lua", 5984, "src/config.lua" },
   { "src/environment.lua", 9403, "src/environment.lua" },
-  { "src/http.lua", 7865, "src/http.lua" },
+  { "src/http.lua", 9866, "src/http.lua" },
   { "src/json.lua", 9449, "src/json.lua" },
   { "src/llm.lua", 8315, "src/llm.lua" },
   { "src/pattern.lua", 13485, "src/pattern.lua" },
@@ -43,7 +43,7 @@ local FILES = {
   { "src/util.lua", 5452, "src/util.lua" }
 }
 
-local BUNDLE = { "dist/opencode.lua", 168248, "opencode.lua" }
+local BUNDLE = { "dist/opencode.lua", 170249, "opencode.lua" }
 
 -- Where the files land. Decided once, here, rather than relying on the shell's
 -- directory still being the same when the last file arrives.
@@ -139,22 +139,44 @@ end
 -- anything reachable from here, and left alone it arrives as a Lua stack trace
 -- through the middle of a download loop.
 local function fetch(url)
-  -- One table, not a url followed by an options table: CC dispatches on the type
-  -- of the first argument, so a table in second place is read as the legacy
-  -- positional form's POST body and rejected with "bad argument #2 (string
-  -- expected, got table)". The url belongs inside the table.
-  local ok, handle = pcall(http.request, { url = url, method = "GET", timeout = 60 })
+  -- `http.get`, never `http.request`.
+  --
+  -- `http.request` is the asynchronous half of CC's api: it starts the request and
+  -- returns immediately, delivering the response later as an `http_success` event.
+  -- Its own source calls the return value "for legacy reasons" and undocumented.
+  -- It is a boolean, so reading a response out of it raises "attempt to index
+  -- local 'handle' (a boolean value)" on the very first file, before anything is
+  -- written. `http.get` is the synchronous wrapper around that same call.
+  --
+  -- The url goes inside the table. CC dispatches on the type of the first
+  -- argument, and a string puts it in the legacy positional signature, where
+  -- argument 2 is the body and must be a string.
+  --
+  -- A failure comes back as `nil, message`, plus the failing response as a third
+  -- value whenever the server answered at all. The size check needs the status
+  -- from that third value, not the message, which on a computer is a bare reason
+  -- phrase.
+  local ok, handle, reason, failed = pcall(http.get, { url = url, timeout = 60 })
   if not ok then
-    local reason = tostring(handle)
+    return nil, tostring(handle)
+  end
+  if not handle then
+    if failed then
+      local code = failed.getResponseCode and failed.getResponseCode() or 0
+      if failed.close then
+        failed.close()
+      end
+      return nil, "HTTP " .. code
+    end
+    -- The socket failed, and nothing answered. A host the server's allowlist does
+    -- not permit lands here too, because CC refuses it before making the request.
+    reason = tostring(reason or "could not connect")
     local lower = reason:lower()
     if lower:find("domain", 1, true) and lower:find("not permitted", 1, true) then
       local host = url:match("^https?://([^/]+)") or url
       return nil, "the server's http allowlist does not permit " .. host
     end
     return nil, reason
-  end
-  if not handle then
-    return nil, "could not connect"
   end
   local status = handle.getResponseCode()
   local body = handle.readAll()

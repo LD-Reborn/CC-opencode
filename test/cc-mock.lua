@@ -54,8 +54,13 @@ function M.respondJson(value, status)
   M.respond({ status = status or 200, body = require("json").encode(value) })
 end
 
---- Make the next request fail the way a transport error does, so `pcall` in the
--- http layer sees a thrown value.
+--- Make the next request fail the way a transport error does.
+--
+-- On a computer this is not an exception. The socket fails, `http_failure` is
+-- queued, and the synchronous wrapper hands back `nil` and a message; the
+-- `pcall` in the http layer is there for malformed arguments, not for the
+-- network. A mock that threw instead would send callers looking for a guard that
+-- real code does not need.
 function M.failWith(message)
   M.failures[#M.failures + 1] = message or "connection refused"
 end
@@ -69,18 +74,6 @@ local function popResponse(url, options)
     return { status = 200, body = response }
   end
   return response
-end
-
-local function readAll(handle)
-  local position = 1
-  return function()
-    if position > #handle.body then
-      return nil
-    end
-    local chunk = handle.body:sub(position, position + 1023)
-    position = position + 1024
-    return chunk
-  end
 end
 
 function M.install()
@@ -242,63 +235,178 @@ function M.install()
     end,
   }
 
+  -- ComputerCraft's http API, on its real argument handling and its real return
+  -- values. There are two things in it that read as reasonable, cannot work on a
+  -- computer, and that this mock used to wave through:
+  --
+  --   1. `http.request` is *asynchronous*. It starts the request, returns
+  --      immediately, and delivers the response later as an `http_success` or
+  --      `http_failure` event. Its own source calls the return value "for legacy
+  --      reasons" and undocumented. It is a boolean, so reading a response out of
+  --      it raises "attempt to index local 'handle' (a boolean value)" and
+  --      nothing is ever fetched. The synchronous pair is `http.get`/`http.post`,
+  --      which wraps the very same call in an `os.pullEvent` loop internally.
+  --
+  --   2. All three dispatch on the type of the *first* argument. A table is the
+  --      options form, with the url inside it. A string is the legacy positional
+  --      signature, where argument 2 is the body and so must be a string — which
+  --      is why `http.request(url, { method = "GET" })` is refused with "bad
+  --      argument #2 (string expected, got table)".
+  --
+  -- A mock that accepts any arrangement and hands back a handle cannot fail the
+  -- way the hardware does, so a program that made no working request at all had a
+  -- fully green suite. Both refusals are reproduced here now.
+  --
+  -- Failures follow the documented contract as well: `nil, message`, plus the
+  -- failing Response as a third value whenever the server answered at all. That
+  -- third value is the only place a provider's own error text lives, so losing it
+  -- turns a 401 into a bare "HTTP 401" — worth modelling rather than flattening.
+  local function checkField(options, key, expected, optional)
+    local value = options[key]
+    if (value ~= nil or not optional) and type(value) ~= expected then
+      error(string.format("bad field '%s' (%s expected, got %s)", key, expected, type(value)), 0)
+    end
+  end
+
+  local function checkRequestOptions(options, allowBody)
+    checkField(options, "url", "string", false)
+    if allowBody == false then
+      -- `get` refuses a body outright, checking it as "nil expected".
+      if options.body ~= nil then
+        error("bad field 'body' (nil expected, got " .. type(options.body) .. ")", 0)
+      end
+    else
+      checkField(options, "body", "string", true)
+    end
+    checkField(options, "headers", "table", true)
+    checkField(options, "method", "string", true)
+    checkField(options, "redirect", "boolean", true)
+    checkField(options, "timeout", "number", true)
+    if options.method then
+      local method = options.method:upper()
+      if method == "CONNECT" then
+        error("Unsupported HTTP method", 0)
+      end
+      if method == "" or #method > 32 or method:find("[^A-Z_-]") then
+        error("Invalid HTTP method", 0)
+      end
+    end
+  end
+
+  -- What a computer says for a status it has no reason phrase ready for. Kept
+  -- distinct from anything the program computes, so that a caller which mistakes
+  -- this message for the real error shows up as a test failure.
+  local REASON = {
+    [400] = "Bad Request",
+    [401] = "Unauthorized",
+    [403] = "Forbidden",
+    [404] = "Not Found",
+    [422] = "Unprocessable Entity",
+    [429] = "Too Many Requests",
+    [500] = "Internal Server Error",
+    [502] = "Bad Gateway",
+    [503] = "Service Unavailable",
+  }
+
+  local function responseHandle(response)
+    local body = response.body or ""
+    local position = 1
+    return {
+      read = function(n)
+        local chunk = body:sub(position, position + (n or 1024) - 1)
+        position = position + #chunk
+        if chunk == "" then
+          return nil
+        end
+        return chunk
+      end,
+      readAll = function()
+        return body
+      end,
+      getResponseCode = function()
+        return response.status or 200
+      end,
+      getResponseHeaders = function()
+        return response.headers or {}
+      end,
+      close = function() end,
+    }
+  end
+
+  -- What a request actually does, once its arguments have been sorted out.
+  local function send(url, options)
+    M.requests[#M.requests + 1] = {
+      url = url,
+      method = options.method,
+      headers = options.headers,
+      body = options.body,
+      timeout = options.timeout,
+    }
+    local failure = table.remove(M.failures, 1)
+    if failure then
+      return nil, failure
+    end
+    local response = popResponse(url, options)
+    local status = response.status or 200
+    if status >= 200 and status < 300 then
+      return responseHandle(response)
+    end
+    return nil, REASON[status] or ("HTTP error " .. status), responseHandle(response)
+  end
+
   _G.http = {
-    -- ComputerCraft dispatches on the type of the *first* argument:
-    --
-    --   http.request { url = ..., method = ..., timeout = ... }   the table form
-    --   http.request(url, body, headers)                         the legacy form
-    --
-    -- A table in second place is therefore the legacy form's `body`, which must
-    -- be a string, and it is rejected with "bad argument #2 (string expected,
-    -- got table)". This mock used to accept any arrangement, which let a program
-    -- that cannot make a single request on a real computer pass every test; the
-    -- check below is what makes that impossible.
-    request = function(a, b, c)
-      local url, options
+    get = function(a, b, c)
       if type(a) == "table" then
-        options = a
-        url = a.url
-        if type(url) ~= "string" then
-          error("bad argument #1 to 'request' (string expected, got " .. type(url) .. ")", 0)
+        checkRequestOptions(a, false)
+        return send(a.url, a)
+      end
+      if type(a) ~= "string" then
+        error("bad argument #1 to 'get' (string expected, got " .. type(a) .. ")", 0)
+      end
+      if b ~= nil and type(b) ~= "table" then
+        error("bad argument #2 to 'get' (table expected, got " .. type(b) .. ")", 0)
+      end
+      return send(a, { method = "GET", headers = b })
+    end,
+
+    post = function(a, b, c)
+      if type(a) == "table" then
+        checkRequestOptions(a, true)
+        return send(a.url, a)
+      end
+      if type(a) ~= "string" then
+        error("bad argument #1 to 'post' (string expected, got " .. type(a) .. ")", 0)
+      end
+      if type(b) ~= "string" then
+        error("bad argument #2 to 'post' (string expected, got " .. type(b) .. ")", 0)
+      end
+      return send(a, { method = "POST", body = b, headers = c })
+    end,
+
+    -- Asynchronous, and the reason is not obvious from the name: this starts the
+    -- request and returns a boolean. The response arrives as an event, which this
+    -- mock does not deliver -- `os.pullEvent` here is a stub -- so a caller that
+    -- correctly waits for one will hang visibly rather than quietly pass.
+    request = function(a, b, c)
+      if type(a) == "table" then
+        checkRequestOptions(a, true)
+        local handle, message = send(a.url, a)
+        if handle then
+          return true
         end
-      elseif type(a) == "string" then
-        url = a
-        if b ~= nil and type(b) ~= "string" then
-          error("bad argument #2 to 'request' (string expected, got " .. type(b) .. ")", 0)
-        end
-        options = { method = b and "POST" or "GET", body = b, headers = c }
-      else
+        return false, message
+      end
+      if type(a) ~= "string" then
         error("bad argument #1 to 'request' (string expected, got " .. type(a) .. ")", 0)
       end
-      M.requests[#M.requests + 1] = {
-        url = url,
-        method = options.method,
-        headers = options.headers,
-        body = options.body,
-        timeout = options.timeout,
-      }
-      local failure = table.remove(M.failures, 1)
-      if failure then
-        error(failure, 0)
+      if b ~= nil and type(b) ~= "string" then
+        error("bad argument #2 to 'request' (string expected, got " .. type(b) .. ")", 0)
       end
-      local response = popResponse(url, options)
-      local body = response.body or ""
-      local read = readAll({ body = body })
-      return {
-        read = function()
-          return read()
-        end,
-        readAll = function()
-          return body
-        end,
-        getResponseCode = function()
-          return response.status or 200
-        end,
-        getResponseHeaders = function()
-          return response.headers or {}
-        end,
-        close = function() end,
-      }
+      local handle, message = send(a, { method = b and "POST" or "GET", body = b, headers = c })
+      if handle then
+        return true
+      end
+      return false, message
     end,
   }
 

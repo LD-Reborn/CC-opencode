@@ -1,8 +1,11 @@
--- HTTP with retries, built on ComputerCraft's `http.request`.
+-- HTTP with retries, built on ComputerCraft's synchronous `http.get`/`http.post`.
 --
--- CC's request is a blocking read of the whole body, so there is no incremental
--- streaming here. Requests that ask for `stream = true` are buffered and then
--- reassembled from SSE frames by the LLM client.
+-- There is no incremental streaming here, and the reason is the shape of CC's
+-- api rather than a choice. The response handle only exists once the whole
+-- response has arrived, so there is nothing to hand on as it comes in. A request
+-- that asks for `stream = true` is therefore buffered and then reassembled from
+-- SSE frames by the LLM client; what that costs is the wait, since the terminal
+-- stays quiet until the last byte lands.
 
 local json = require("json")
 local util = require("util")
@@ -102,27 +105,39 @@ end
 --- Perform a request, retrying 429 and 5xx responses.
 --
 -- Returns `response` on success, or `nil, message` on failure. A non-2xx status
--- is returned as a normal response so callers can read the provider's error
--- body; only transport failures and exhausted retries become errors.
+-- is returned as a normal response so callers can read the provider's error body;
+-- only transport failures, exhausted retries, and a request table CC refuses
+-- become errors.
 function M.request(url, options)
   options = options or {}
   local attempts = options.attempts or M.MAX_ATTEMPTS
   local lastError = "no attempt was made"
 
   for attempt = 1, attempts do
-    -- The request is one table, not a url followed by an options table.
+    -- `http.get` or `http.post`, never `http.request`.
     --
-    -- CC dispatches on the first argument's type. Given a string it takes the
-    -- legacy positional form, where argument 2 is the POST body and argument 3
-    -- is the headers, so a table in second place is rejected outright with
-    -- "bad argument #2 (string expected, got table)". The url therefore belongs
-    -- *inside* the table, which is the documented form and the only one that
-    -- carries a method, a timeout and a body together.
+    -- `http.request` is the asynchronous half of CC's API: it starts the request,
+    -- returns immediately, and delivers the response later as an `http_success`
+    -- event. Its own source describes the return value as "for legacy reasons"
+    -- and undocumented. It is a boolean, so reading a response out of it raises
+    -- "attempt to index local 'handle' (a boolean value)" and nothing is ever
+    -- fetched. The synchronous pair wraps that identical call in an `os.pullEvent`
+    -- loop, and that loop is the whole difference.
+    --
+    -- `get` refuses a body and `post` allows one, so the entry point follows the
+    -- presence of a body rather than the other way round. A body-less DELETE goes
+    -- through `get`, which passes `method` on to the socket regardless.
+    --
+    -- The url goes *inside* the table, which is the documented options form.
+    -- CC dispatches on the type of the first argument, and a string puts it in the
+    -- legacy positional signature, where argument 2 is the body and must be a
+    -- string -- so a table in second place is refused outright with "bad argument
+    -- #2 (string expected, got table)".
     --
     -- The keys are spelled out rather than merged from `options` because a nil
-    -- value is not the same as an absent key here: passing `headers = nil`
-    -- through a table constructor omits it, but a caller that built the options
-    -- table itself cannot be relied on to have done the same.
+    -- value is not the same as an absent key: `headers = nil` through a table
+    -- constructor drops the key, but a caller that built the options table itself
+    -- cannot be relied on to have done the same.
     local request = {
       url = url,
       method = options.method or "GET",
@@ -134,12 +149,25 @@ function M.request(url, options)
     if options.body then
       request.body = options.body
     end
-    local ok, handle = pcall(http.request, request)
+    local ok, handle, reason, failed = pcall(request.body and http.post or http.get, request)
 
-    if ok and handle then
-      local status = handle.getResponseCode and handle.getResponseCode() or 200
-      local headers = handle.getResponseHeaders and handle.getResponseHeaders() or {}
-      local response = { status = status, headers = headers, body = readHandle(handle, options.maxBytes) }
+    if not ok then
+      -- A throw here is CC checking the shape of the table, which is our bug and
+      -- not the network's: an unusable method, a timeout that is not a number.
+      -- Retrying it three times would spend three requests to learn the same
+      -- thing, so say what it is instead of dressing it up as a network fault.
+      return nil, "internal error: " .. tostring(handle)
+    end
+
+    -- A 2xx comes back as the first value. A 4xx or 5xx comes back as the third,
+    -- with the message in the second, and both are real responses worth reading:
+    -- a provider's own error text exists only in that body, and a 429's
+    -- Retry-After header only with it. Only a transport failure has neither.
+    local answer = handle or failed
+    if answer then
+      local status = answer.getResponseCode and answer.getResponseCode() or 200
+      local headers = answer.getResponseHeaders and answer.getResponseHeaders() or {}
+      local response = { status = status, headers = headers, body = readHandle(answer, options.maxBytes) }
       if not (M.RETRYABLE[status] and attempt < attempts) then
         return response
       end
@@ -148,12 +176,15 @@ function M.request(url, options)
         util.sleep(backoff(attempt, headers))
       end
     else
-      if isBlockedHost(handle) then
+      -- The socket failed and nothing answered. This is also where a host missing
+      -- from the server's allowlist lands, since CC refuses it before the request
+      -- is ever made -- so the wording is checked here as well as on a throw.
+      if isBlockedHost(reason) then
         -- Fail now rather than twice more: the answer cannot change, and the
         -- backoff would turn a missing config line into a ten second wait.
         return nil, blockedMessage(url)
       end
-      lastError = "could not reach " .. url .. " (" .. tostring(handle) .. ")"
+      lastError = "could not reach " .. url .. " (" .. tostring(reason) .. ")"
       if attempt < attempts then
         util.sleep(backoff(attempt, nil))
       end
