@@ -51,11 +51,11 @@ local FILES = {
   { "src/tool/webfetch.lua", 3373, "src/tool/webfetch.lua" },
   { "src/tool/write.lua", 2421, "src/tool/write.lua" },
   { "src/truncate.lua", 3232, "src/truncate.lua" },
-  { "src/ui.lua", 51434, "src/ui.lua" },
+  { "src/ui.lua", 51460, "src/ui.lua" },
   { "src/util.lua", 5452, "src/util.lua" }
 }
 
-local BUNDLE = { "dist/opencode.lua", 242190, "opencode.lua" }
+local BUNDLE = { "dist/opencode.lua", 242216, "opencode.lua" }
 
 -- Where the files land. Decided once, here, rather than relying on the shell's
 -- directory still being the same when the last file arrives.

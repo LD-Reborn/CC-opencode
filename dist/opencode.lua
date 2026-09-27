@@ -6197,7 +6197,7 @@ function U:handle(event)
   end
 
   if name == "key" or name == "key_up" then
-    local key = self:keyName(event[2])
+    local key = keys.getName(event[2]) or self:keyName(event[2])
     -- On the press, never on the release. ComputerCraft sends both, and a key
     -- handled on both is a key that happens twice: holding the up arrow walks back
     -- through the history two entries per press, and holding enter submits the empty
