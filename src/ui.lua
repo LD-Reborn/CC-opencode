@@ -938,7 +938,7 @@ function U:blit(x, y, width, height, text, foreground, background)
   if clipped == "" then
     return false
   end
-  GUI.drawText(self.screen, x, y, foreground, background, clipped)
+  GUI.drawText(self.screen, x, y, foreground or WHITE, background or BLACK, clipped)
   return true
 end
 
