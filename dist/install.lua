@@ -29,7 +29,7 @@ local GUI_SIZE = 18625
 
 -- fetch path, expected size, path to write
 local FILES = {
-  { "init.lua", 25196, "init.lua" },
+  { "init.lua", 25600, "init.lua" },
   { "src/agent.lua", 13912, "src/agent.lua" },
   { "src/config.lua", 6849, "src/config.lua" },
   { "src/environment.lua", 16849, "src/environment.lua" },
@@ -41,22 +41,22 @@ local FILES = {
   { "src/prompt.lua", 7430, "src/prompt.lua" },
   { "src/provider.lua", 6448, "src/provider.lua" },
   { "src/session.lua", 7047, "src/session.lua" },
-  { "src/tool/bash.lua", 8924, "src/tool/bash.lua" },
+  { "src/tool/bash.lua", 8921, "src/tool/bash.lua" },
   { "src/tool/edit.lua", 9879, "src/tool/edit.lua" },
   { "src/tool/glob.lua", 2449, "src/tool/glob.lua" },
   { "src/tool/grep.lua", 4643, "src/tool/grep.lua" },
-  { "src/tool/lua.lua", 4417, "src/tool/lua.lua" },
+  { "src/tool/lua.lua", 5102, "src/tool/lua.lua" },
   { "src/tool/read.lua", 6948, "src/tool/read.lua" },
   { "src/tool/registry.lua", 4961, "src/tool/registry.lua" },
   { "src/tool/todowrite.lua", 4084, "src/tool/todowrite.lua" },
   { "src/tool/webfetch.lua", 3373, "src/tool/webfetch.lua" },
   { "src/tool/write.lua", 2421, "src/tool/write.lua" },
   { "src/truncate.lua", 3232, "src/truncate.lua" },
-  { "src/ui.lua", 51460, "src/ui.lua" },
+  { "src/ui.lua", 51904, "src/ui.lua" },
   { "src/util.lua", 5452, "src/util.lua" }
 }
 
-local BUNDLE = { "dist/opencode.lua", 246868, "opencode.lua" }
+local BUNDLE = { "dist/opencode.lua", 248398, "opencode.lua" }
 
 -- Where the files land. Decided once, here, rather than relying on the shell's
 -- directory still being the same when the last file arrives.

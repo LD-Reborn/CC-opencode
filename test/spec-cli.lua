@@ -572,6 +572,53 @@ return function(t, mock)
   end
 
   do
+    -- Reasoning is the one line that is always long — a model's thinking
+    -- overruns a 51-column terminal several times over — and it arrives as a
+    -- single event, the shape that used to be written straight out and lose
+    -- everything past the right edge. The mock discards an overlong row the
+    -- way ComputerCraft does, so `lost == 0` is the assertion that matters,
+    -- and the newline before the label is the assertion that the block
+    -- starts on a row of its own rather than glued to the answer's last.
+    local init = assert(loadInit())
+    local screen = mock.screen({}, { 51, 19 })
+    local thinking = "The user wants a file that outputs \"hello world\". " ..
+      "I should create a small Lua program, write it to disk, and tell the user how to run it.\n" ..
+      "Now to write the file."
+    mock.respond({
+      status = 200,
+      body = json.encode({
+        choices = { { message = { content = "hi", reasoning_content = thinking }, finish_reason = "stop" } },
+      }),
+    })
+    init.main({ "think about it" }, screen)
+
+    t.eq(screen.lost, 0, "a long reasoning loses nothing past the right edge")
+    t.contains(screen.text, "\n(reasoning) The user wants a file that outputs", "the reasoning starts on a row of its own")
+    t.contains(screen.text, "Now to write the file.", "and the end of it, which is what used to be lost")
+  end
+
+  do
+    -- The same reasoning as the first thing on the screen, which is where it
+    -- lands when the step it belongs to returns no answer of its own. It
+    -- wraps from the first column rather than from wherever a previous line
+    -- happened to end.
+    local init = assert(loadInit())
+    local screen = mock.screen({}, { 51, 19 })
+    local thinking = "The user wants a file that outputs \"hello world\", so I will write a small program."
+    mock.respond({
+      status = 200,
+      body = json.encode({
+        choices = { { message = { content = "", reasoning_content = thinking }, finish_reason = "stop" } },
+      }),
+    })
+    init.main({ "think about it" }, screen)
+
+    t.eq(screen.lost, 0, "a reasoning that is the first output loses nothing")
+    t.contains(screen.text, "(reasoning) The user wants a file that outputs", "the reasoning is on the screen")
+    t.contains(screen.text, "so I will write a small program.", "including the end of it")
+  end
+
+  do
     local init = assert(loadInit())
     local screen = mock.screen({ "a long path", "/exit" })
     local path = mock.root .. "/" .. string.rep("deep/", 20) .. "file.txt"

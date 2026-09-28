@@ -154,12 +154,20 @@ local function renderer(monitor)
     end
   end
 
+  -- Whether anything has been drawn yet. `line` ends its own line but does not
+  -- start one, so a reasoning block drawn after the answer would begin on the
+  -- answer's last row — filled to the margin, then wrapped — instead of on a
+  -- row of its own. The first thing on a blank screen gets no leading row.
+  local drawn = false
+
   return function(event)
     if event.type == "text" then
       out(monitor, event.delta)
+      drawn = true
       status("writing", LIGHT_GRAY)
     elseif event.type == "reasoning" then
-      line(monitor, "(reasoning) " .. event.text, LIGHT_GRAY)
+      line(monitor, (drawn and "\n" or "") .. "(reasoning) " .. event.text, LIGHT_GRAY)
+      drawn = true
       status("thinking", LIGHT_GRAY)
     elseif event.type == "step" then
       status(string.format("step %d/%d", event.step, event.max), LIGHT_GRAY)

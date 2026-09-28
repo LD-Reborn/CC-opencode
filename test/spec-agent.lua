@@ -87,11 +87,11 @@ return function(t, mock)
   t.eq(messages[1].role, "system", "a system message leads the conversation")
   t.contains(messages[1].content, "opencode", "the system prompt identifies the agent")
   t.contains(messages[1].content, "openai/gpt-4o", "the environment block names the exact model")
-  t.contains(messages[1].content, "Available tools: bash, read", "the system prompt lists the tools")
+  t.contains(messages[1].content, "Available tools: lua, bash, read", "the system prompt lists the tools")
   t.eq(messages[2].role, "user", "the user message follows")
   t.eq(messages[2].content, "say hi", "the user text is sent verbatim")
   t.ok(#sentBody().tools > 0, "the tool schemas are sent with the request")
-  t.eq(sentBody().tools[1]["function"].name, "bash", "the first tool schema is bash")
+  t.eq(sentBody().tools[1]["function"].name, "lua", "the first tool schema is lua")
 
   -- A tool call runs the tool, feeds the result back, and then the model answers.
 

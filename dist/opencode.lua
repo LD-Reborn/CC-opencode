@@ -2358,9 +2358,16 @@ local function capturePrint(fn)
     end
     lines[#lines + 1] = table.concat(parts, "\t")
   end
-  local ok, err = pcall(fn)
+  -- Three values off the pcall: whether it raised, then the two `fn` returns.
+  -- `runWithTimeout` answers `false, "message"` for a runtime error, and the
+  -- message is the third value back -- capturing two here would drop it, and
+  -- the runtime error would reach the model as an empty output.
+  local ok, a, b = pcall(fn)
   _G.print = original
-  return ok, err, table.concat(lines, "\n")
+  if not ok then
+    error(a, 0)
+  end
+  return a, b, table.concat(lines, "\n")
 end
 
 --- Run Lua code with a timeout using coroutines.
@@ -2373,7 +2380,12 @@ local function runWithTimeout(code, timeoutMs)
     chunk, compileErr = load(code)
   end
   if not chunk then
-    return false, "compile error: " .. tostring(compileErr), ""
+    -- `loadstring` puts `[string "..."]:1: ` in front of its reason, and the
+    -- registry strips a position from every tool error on the way out -- a strip
+    -- that would take this prefix with it, leaving the model the bare parse
+    -- error and no idea what kind it was. Strip the position first, then name it.
+    local reason = tostring(compileErr):gsub("^.-:%d+: ", "")
+    error("compile error: " .. reason, 0)
   end
 
   local co = coroutine.create(chunk)
@@ -2390,7 +2402,7 @@ local function runWithTimeout(code, timeoutMs)
     if timerId then
       local event = { os.pullEvent() }
       if event[1] == "timer" and event[2] == timerId then
-        return false, string.format("timeout: code exceeded %d ms", timeoutMs), ""
+        return false, string.format("timeout: code exceeded %d ms", timeoutMs)
       end
       -- Re-queue the event so the coroutine can see it
       os.queueEvent(unpack(event))
@@ -2406,9 +2418,9 @@ local function runWithTimeout(code, timeoutMs)
   end
 
   if not ok then
-    return false, tostring(err), ""
+    return false, tostring(err)
   end
-  return true, nil, ""
+  return true, nil
 end
 
 registry.define({
@@ -2619,13 +2631,13 @@ local function run(command, workdir, timeoutMs, ctx)
       exitCode = shell.run(line)
     end)
     local timer = os.startTimer(math.ceil(timeoutMs / 1000))
-    local event = parallel.waitForAny({
+    local event = parallel.waitForAny(
       function()
         coroutine.resume(co)
         return coroutine.status(co) == "dead" and "shell" or nil
       end,
-      function() return "timer" end,
-    })
+      function() return "timer" end
+    )
     if event == "timer" then
       abandoned = true
       notes[#notes + 1] = string.format(
@@ -5328,9 +5340,9 @@ local DARK_GRAY = colors.darkGray
 local ACCENT = colors.lightBlue
 local RED = colors.red
 
--- CraftOS key codes. The numbers are the stable part; `keys.getName` is consulted
--- afterwards for anything not in the table, so a binding survives a CraftOS that
--- spells its key names differently.
+-- CraftOS key codes, for a fallback when `keys.getName` does not know a code. The
+-- names are the stable part, not the numbers: CC:Tweaked renumbered the keys when
+-- Minecraft moved to LWJGL 3, so the name is what a binding survives on.
 local KEY = {
   enter = 28,
   backspace = 14,
@@ -6358,7 +6370,12 @@ function U:handle(event)
   end
 
   if name == "key" or name == "key_up" then
-    local key = keys.getName(event[2]) or self:keyName(event[2])
+    -- The name is what a binding survives on, so `keys.getName` is asked first and
+    -- its answer is aliased like any other: CC:Tweaked spells the page keys
+    -- "pageUp" and "pageDown", and the alias table below is the one place that
+    -- spelling is mapped. The table is only a fallback for a code `getName` does
+    -- not know, which on a computer is none of them.
+    local key = KEY_ALIASES[keys.getName(event[2])] or self:keyName(event[2])
     -- On the press, never on the release. ComputerCraft sends both, and a key
     -- handled on both is a key that happens twice: holding the up arrow walks back
     -- through the history two entries per press, and holding enter submits the empty
@@ -6380,7 +6397,7 @@ function U:handle(event)
       return { action = "scroll", delta = math.max(self.rows.viewHeight - 1, 1) }
     elseif key == "home" or key == "lctrl" or key == "rctrl" then
       return { action = "start" }
-    elseif key == "fin" then
+    elseif key == "fin" or key == "end" then
       return { action = "end" }
     end
     -- Every other key press goes to CC-GUI, which owns the text editing.
@@ -6791,12 +6808,20 @@ local function renderer(monitor)
     end
   end
 
+  -- Whether anything has been drawn yet. `line` ends its own line but does not
+  -- start one, so a reasoning block drawn after the answer would begin on the
+  -- answer's last row — filled to the margin, then wrapped — instead of on a
+  -- row of its own. The first thing on a blank screen gets no leading row.
+  local drawn = false
+
   return function(event)
     if event.type == "text" then
       out(monitor, event.delta)
+      drawn = true
       status("writing", LIGHT_GRAY)
     elseif event.type == "reasoning" then
-      line(monitor, "(reasoning) " .. event.text, LIGHT_GRAY)
+      line(monitor, (drawn and "\n" or "") .. "(reasoning) " .. event.text, LIGHT_GRAY)
+      drawn = true
       status("thinking", LIGHT_GRAY)
     elseif event.type == "step" then
       status(string.format("step %d/%d", event.step, event.max), LIGHT_GRAY)

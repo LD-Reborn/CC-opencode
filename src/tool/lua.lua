@@ -38,9 +38,16 @@ local function capturePrint(fn)
     end
     lines[#lines + 1] = table.concat(parts, "\t")
   end
-  local ok, err = pcall(fn)
+  -- Three values off the pcall: whether it raised, then the two `fn` returns.
+  -- `runWithTimeout` answers `false, "message"` for a runtime error, and the
+  -- message is the third value back -- capturing two here would drop it, and
+  -- the runtime error would reach the model as an empty output.
+  local ok, a, b = pcall(fn)
   _G.print = original
-  return ok, err, table.concat(lines, "\n")
+  if not ok then
+    error(a, 0)
+  end
+  return a, b, table.concat(lines, "\n")
 end
 
 --- Run Lua code with a timeout using coroutines.
@@ -53,7 +60,12 @@ local function runWithTimeout(code, timeoutMs)
     chunk, compileErr = load(code)
   end
   if not chunk then
-    return false, "compile error: " .. tostring(compileErr), ""
+    -- `loadstring` puts `[string "..."]:1: ` in front of its reason, and the
+    -- registry strips a position from every tool error on the way out -- a strip
+    -- that would take this prefix with it, leaving the model the bare parse
+    -- error and no idea what kind it was. Strip the position first, then name it.
+    local reason = tostring(compileErr):gsub("^.-:%d+: ", "")
+    error("compile error: " .. reason, 0)
   end
 
   local co = coroutine.create(chunk)
@@ -70,7 +82,7 @@ local function runWithTimeout(code, timeoutMs)
     if timerId then
       local event = { os.pullEvent() }
       if event[1] == "timer" and event[2] == timerId then
-        return false, string.format("timeout: code exceeded %d ms", timeoutMs), ""
+        return false, string.format("timeout: code exceeded %d ms", timeoutMs)
       end
       -- Re-queue the event so the coroutine can see it
       os.queueEvent(unpack(event))
@@ -86,9 +98,9 @@ local function runWithTimeout(code, timeoutMs)
   end
 
   if not ok then
-    return false, tostring(err), ""
+    return false, tostring(err)
   end
-  return true, nil, ""
+  return true, nil
 end
 
 registry.define({

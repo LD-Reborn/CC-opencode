@@ -151,6 +151,21 @@ function M.install()
       handle:close()
       return size
     end,
+    -- `fs.list` is what `env.listDir` calls, and the only directory reader
+    -- CraftOS has. `fs.dir` below is not a CraftOS function and nothing calls
+    -- it, so it is kept out: a mock that grows a method the target lacks
+    -- will happily pass code that cannot run.
+    list = function(path)
+      local names = {}
+      local pipe = io.popen("ls -A " .. quote(path) .. " 2>/dev/null")
+      if pipe then
+        for name in pipe:lines() do
+          names[#names + 1] = name
+        end
+        pipe:close()
+      end
+      return names
+    end,
     attributes = function(path, kind)
       if kind ~= "modification" then
         return nil
@@ -162,17 +177,6 @@ function M.install()
     end,
     makeDir = function(path)
       return os.execute("mkdir -p " .. quote(path))
-    end,
-    dir = function(path)
-      local names = {}
-      local pipe = io.popen("ls -A " .. quote(path) .. " 2>/dev/null")
-      if pipe then
-        for name in pipe:lines() do
-          names[#names + 1] = name
-        end
-        pipe:close()
-      end
-      return names
     end,
     open = function(path, mode)
       local file, err = io.open(path, mode == "w" and "wb" or (mode == "a" and "ab" or "rb"))
@@ -247,9 +251,10 @@ function M.install()
 
   _G.parallel = {
     --- CC yields to the event loop until one thread yields an event. The mock has
-    -- no event loop, so a coroutine is resumed once: it either finishes (return
-    -- the thread) or yields (fall through to the timer token).
-    waitForAny = function(threads)
+    -- no event loop, so each thread is run once: one that finishes returns its
+    -- token, and one that yields falls through to the next.
+    waitForAny = function(...)
+      local threads = { ... }
       for _, thread in ipairs(threads) do
         if type(thread) == "thread" then
           local ok, err = coroutine.resume(thread)
@@ -258,6 +263,11 @@ function M.install()
           end
           if coroutine.status(thread) == "dead" then
             return thread
+          end
+        elseif type(thread) == "function" then
+          local token = thread()
+          if token ~= nil then
+            return token
           end
         end
       end
@@ -563,6 +573,14 @@ function M.install()
       return nil
     end
     return unpack(fallback, 1, 2)
+  end
+  -- `os.queueEvent`, which a program uses to hand an event it pulled to a
+  -- coroutine of its own: the lua tool runs the model's code in one and feeds it
+  -- every event this loop pulls, so the tool can time out. The queue is the same
+  -- one `pullEvent` reads, and an event queued lands where a key the operator
+  -- pressed would -- behind whatever is still waiting, ahead of the next pull.
+  _G.os.queueEvent = function(name, ...)
+    M.events[#M.events + 1] = { name, ... }
   end
   _G.os.getComputerLabel = function()
     return "testbed"

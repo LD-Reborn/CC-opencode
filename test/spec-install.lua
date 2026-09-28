@@ -188,7 +188,7 @@ return function(t, mock)
     return code, table.concat(printed, "\n")
   end
 
-  t.eq(#paths, 25, "the installer lists the entry point, the library, and the bundle")
+  t.eq(#paths, 26, "the installer lists the entry point, the library, and the bundle")
   t.eq(paths[1], "init.lua", "starting with the entry point")
   t.eq(paths[#paths], "dist/opencode.lua", "and ending with the bundle")
 
@@ -297,7 +297,7 @@ return function(t, mock)
     t.eq(requested(3), repo .. "/raw/main/init.lua", "and so is a page that admits it is one")
     t.eq(requested(4), repo .. "/branch/main/init.lua", "the last candidate is tried too")
     t.eq(requested(5), repo .. "/branch/main/init.lua", "and the install carries on from the one that worked")
-    t.eq(requested(28), repo .. "/branch/main/src/util.lua", "through the whole tree")
+    t.eq(requested(29), repo .. "/branch/main/src/util.lua", "through the whole tree")
     t.ok(env.exists(mock.root .. "/init.lua"), "writing the files it found")
   end
 
@@ -359,11 +359,11 @@ return function(t, mock)
     t.eq(code, 0, "installing from a url succeeds")
     -- One per library file, plus the CC-GUI lookup after them: the interface is
     -- optional, so that one is a search and not a download.
-    t.eq(#mock.requests, 29, "one request per library file, then the CC-GUI search")
+    t.eq(#mock.requests, 30, "one request per library file, then the CC-GUI search")
     t.eq(requested(1), "https://raw.example/main/init.lua", "the first file is the entry point")
-    -- Twenty-four files in the tree: the entry point and the twenty-three modules under
+    -- Twenty-five files in the tree: the entry point and the twenty-four modules under
     -- src/. The bundle is not among them, being a separate entry with its own name.
-    t.eq(requested(24), "https://raw.example/main/src/util.lua", "the last is the last library file")
+    t.eq(requested(25), "https://raw.example/main/src/util.lua", "the last is the last library file")
     t.ok(env.exists(mock.root .. "/init.lua"), "init.lua was written")
     t.ok(env.exists(mock.root .. "/src/agent.lua"), "a nested module went into a directory that did not exist")
     t.ok(env.exists(mock.root .. "/src/tool/registry.lua"), "and so did the second level")
@@ -503,7 +503,7 @@ return function(t, mock)
       "and it is the file from the CC-GUI repository, byte for byte"
     )
     t.contains(said, "  ok    GUI.lua", "and reports it like any other file")
-    t.contains(said, "installed 25 file(s)", "counting it among them")
+    t.contains(said, "installed 26 file(s)", "counting it among them")
   end
 
   do
@@ -523,10 +523,10 @@ return function(t, mock)
     local code = installer({ "https://raw.example/main/" }, withGui(queue(nil, t.root, tree)), nil, nil, nil,
       "https://git.example/owner/ccgui", "release")
     t.eq(code, 0, "a fork of CC-GUI is installed from")
-    -- The tree's twenty-four requests, then the CC-GUI search: the first shape a host
+    -- The tree's twenty-five requests, then the CC-GUI search: the first shape a host
     -- might use answers with the right bytes, so the download is the request after it.
     t.eq(
-      requested(25),
+      requested(26),
       "https://git.example/owner/ccgui/raw/branch/release/GUI.lua",
       "at its own repository and branch"
     )

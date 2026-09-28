@@ -145,13 +145,13 @@ local function run(command, workdir, timeoutMs, ctx)
       exitCode = shell.run(line)
     end)
     local timer = os.startTimer(math.ceil(timeoutMs / 1000))
-    local event = parallel.waitForAny({
+    local event = parallel.waitForAny(
       function()
         coroutine.resume(co)
         return coroutine.status(co) == "dead" and "shell" or nil
       end,
-      function() return "timer" end,
-    })
+      function() return "timer" end
+    )
     if event == "timer" then
       abandoned = true
       notes[#notes + 1] = string.format(

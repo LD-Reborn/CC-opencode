@@ -105,9 +105,9 @@ local DARK_GRAY = colors.darkGray
 local ACCENT = colors.lightBlue
 local RED = colors.red
 
--- CraftOS key codes. The numbers are the stable part; `keys.getName` is consulted
--- afterwards for anything not in the table, so a binding survives a CraftOS that
--- spells its key names differently.
+-- CraftOS key codes, for a fallback when `keys.getName` does not know a code. The
+-- names are the stable part, not the numbers: CC:Tweaked renumbered the keys when
+-- Minecraft moved to LWJGL 3, so the name is what a binding survives on.
 local KEY = {
   enter = 28,
   backspace = 14,
@@ -1135,7 +1135,12 @@ function U:handle(event)
   end
 
   if name == "key" or name == "key_up" then
-    local key = keys.getName(event[2]) or self:keyName(event[2])
+    -- The name is what a binding survives on, so `keys.getName` is asked first and
+    -- its answer is aliased like any other: CC:Tweaked spells the page keys
+    -- "pageUp" and "pageDown", and the alias table below is the one place that
+    -- spelling is mapped. The table is only a fallback for a code `getName` does
+    -- not know, which on a computer is none of them.
+    local key = KEY_ALIASES[keys.getName(event[2])] or self:keyName(event[2])
     -- On the press, never on the release. ComputerCraft sends both, and a key
     -- handled on both is a key that happens twice: holding the up arrow walks back
     -- through the history two entries per press, and holding enter submits the empty
@@ -1157,7 +1162,7 @@ function U:handle(event)
       return { action = "scroll", delta = math.max(self.rows.viewHeight - 1, 1) }
     elseif key == "home" or key == "lctrl" or key == "rctrl" then
       return { action = "start" }
-    elseif key == "fin" then
+    elseif key == "fin" or key == "end" then
       return { action = "end" }
     end
     -- Every other key press goes to CC-GUI, which owns the text editing.
